@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "wasm": "wasm-pack build wasm --target web",
+    "quizzes": "node scripts/sync-quizzes.mjs",
     "dev": "npm run wasm && vite",
     "build": "npm run wasm && tsc && vite build",
     "preview": "vite preview",

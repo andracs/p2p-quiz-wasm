@@ -31,6 +31,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # The newest published quizzes of andracs/cyber-quizzer; the copies in quizzes/ if that fails.
+      - run: npm run quizzes || echo "::warning::Could not fetch the quizzes, using the copies in quizzes/"
       - run: npm test
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3

@@ -3,12 +3,14 @@
 // Every node runs exactly this code. No node has a special role.
 
 import init, { QuizEngine, quizName } from "../wasm/pkg/p2p_quiz_wasm.js";
+import { findQuiz } from "./catalog";
 import { attempt } from "./dom";
 import { PeerNetwork } from "./peer";
 import {
   codeLink,
   createMessage,
   decodeCode,
+  encodeCode,
   type BootstrapCode,
   type EventLogPayload,
   type Message,
@@ -19,9 +21,11 @@ import { Doorman, Knock, RELAY_URL, joinLink, newRoom, parseJoinLink, type Room 
 import {
   clearSession,
   loadEvents,
+  loadQuizChoice,
   loadSession,
   loadUsername,
   saveEvents,
+  saveQuizChoice,
   saveSession,
   saveUsername,
   type Session,
@@ -43,6 +47,7 @@ class QuizNode {
   readonly network: PeerNetwork;
   private door: Doorman | null = null;
   private closed = false;
+  private saveTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     readonly session: Session,
@@ -78,7 +83,14 @@ class QuizNode {
     renderUi();
   }
 
+  /** Store the log soon: events often arrive in bursts, and one write is enough. */
   persist(): void {
+    this.saveTimer ??= setTimeout(() => this.saveNow(), 300);
+  }
+
+  saveNow(): void {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
     saveEvents(this.session.quizId, this.events());
   }
 
@@ -101,6 +113,7 @@ class QuizNode {
   }
 
   close(): void {
+    if (this.saveTimer) this.saveNow();
     this.closed = true;
     this.door?.close();
     this.door = null;
@@ -112,12 +125,13 @@ class QuizNode {
       switch (message.type) {
         case "EVENT":
           return this.onEvent(message, from);
-        case "EVENT_LOG_REQUEST": {
-          const response = createMessage<EventLogPayload>("EVENT_LOG_RESPONSE", this.session.nodeId, {
-            events: this.events(),
-          });
-          return this.network.sendTo(from, response);
-        }
+        case "EVENT_LOG_REQUEST":
+          // In parts: with the questions and many answers, the log outgrows one DataChannel message.
+          for (const events of inParts(this.events())) {
+            const response = createMessage<EventLogPayload>("EVENT_LOG_RESPONSE", this.session.nodeId, { events });
+            this.network.sendTo(from, response);
+          }
+          return;
         case "EVENT_LOG_RESPONSE":
           return this.onEventLog(message.payload as EventLogPayload, from);
       }
@@ -146,6 +160,22 @@ class QuizNode {
   }
 }
 
+/** Parts of at most about 60 KB: every browser takes DataChannel messages of that size. */
+function inParts(events: QuizEvent[], limit = 60_000): QuizEvent[][] {
+  const parts: QuizEvent[][] = [];
+  let size = limit;
+  for (const event of events) {
+    const length = JSON.stringify(event).length;
+    if (size + length > limit) {
+      parts.push([]);
+      size = 0;
+    }
+    parts[parts.length - 1].push(event);
+    size += length;
+  }
+  return parts;
+}
+
 let node: QuizNode | null = null;
 let knock: Knock | null = null;
 
@@ -161,13 +191,16 @@ function activate(next: QuizNode): void {
   next.persist();
 }
 
-function createQuiz(username: string): void {
+function createQuiz(username: string, slug: string): void {
+  const { quiz } = findQuiz(slug);
   const nodeId = crypto.randomUUID();
   const engine = new QuizEngine(nodeId, username);
-  // The engine computes quizId = SHA256(domain|username|timestamp).
+  // The engine computes quizId = SHA256(domain|username|timestamp). The questions go into the log.
   const room = RELAY_URL ? newRoom() : null;
-  engine.create(window.location.hostname, new Date().toISOString(), JSON.stringify(room), crypto.randomUUID());
+  const createdAt = new Date().toISOString();
+  engine.create(location.hostname, createdAt, JSON.stringify(room), JSON.stringify(quiz), crypto.randomUUID());
   activate(new QuizNode({ quizId: engine.quizId, nodeId, username }, engine));
+  saveQuizChoice(slug);
   current().act("PEER_JOINED"); // the creator is in the quiz like everybody else
   current().updateDoor();
   showTab("manage");
@@ -187,9 +220,9 @@ async function join(username: string, link: string): Promise<PendingResponse | n
 /** Knock on the relay until an online node of the quiz offers a link. */
 function startKnocking(room: Room, self: PeerInfo, quizPrefix?: string): void {
   stopKnocking();
-  showJoinStatus(node ? null : "🔎 Looking for someone in the quiz…");
-  const problem = (text: string) => !node && showJoinStatus(`⚠️ ${text} Still trying…`);
-  const attemptKnock = new Knock(room, self, (offer) => answerOffer(self, offer, quizPrefix), problem);
+  showJoinStatus("🔎 Looking for someone in the quiz…");
+  const answer = (offer: BootstrapCode) => answerOffer(self, offer, quizPrefix);
+  const attemptKnock = new Knock(room, self, answer, showJoinStatus);
   knock = attemptKnock;
   attemptKnock.start().catch((error: Error) => {
     if (knock !== attemptKnock) return; // cancelled meanwhile
@@ -206,18 +239,28 @@ function stopKnocking(): void {
   showJoinStatus(null);
 }
 
-/** An online node sent an offer through the relay: join its quiz (or link up our own node again). */
-async function answerOffer(self: PeerInfo, offer: BootstrapCode, quizPrefix?: string): Promise<string> {
+function cancelJoin(): void {
+  stopKnocking();
+  if (node && !node.state().quiz.createdAt) leave(); // never got the quiz: back to the start
+}
+
+/**
+ * An online node sent an offer through the relay: join its quiz, or link up our own node
+ * again. Also when an earlier offer led nowhere: the node then tries another link.
+ */
+async function answerOffer(self: PeerInfo, offer: BootstrapCode, quizPrefix?: string): Promise<BootstrapCode> {
   if (quizPrefix && !offer.quizId.startsWith(quizPrefix)) throw new Error("This offer is for another quiz.");
   if (node?.session.quizId === offer.quizId) return node.network.acceptInvite(offer);
-  showJoinStatus(`🤝 Connecting to ${offer.username}…`);
   const engine = new QuizEngine(self.nodeId, self.username);
   engine.join(offer.quizId);
   const joining = new QuizNode({ quizId: offer.quizId, ...self }, engine);
-  const code = await joining.network.acceptInvite(offer);
+  const response = await joining.network.acceptInvite(offer).catch((error) => {
+    joining.close();
+    throw error;
+  });
   activate(joining);
   showTab("play");
-  return code;
+  return response;
 }
 
 /** The manual way: an invite link or code made by a node of the quiz. */
@@ -227,21 +270,21 @@ async function joinWithInvite(username: string, invitation: string): Promise<Pen
   const engine = new QuizEngine(nodeId, username);
   engine.join(invite.quizId);
   const joining = new QuizNode({ quizId: invite.quizId, nodeId, username }, engine);
-  const code = await joining.network.acceptInvite(invite).catch((error) => {
-    joining.network.close();
+  const response = await joining.network.acceptInvite(invite).catch((error) => {
+    joining.close();
     throw error;
   });
   activate(joining);
   showTab("play");
-  return { link: codeLink(code), inviter: { nodeId: invite.nodeId, username: invite.username } };
+  return { link: codeLink(await encodeCode(response)), inviter: { nodeId: invite.nodeId, username: invite.username } };
 }
 
 /** After a reload: link up again with a manual invite link from any connected node. */
 async function rejoin(invitation: string): Promise<PendingResponse> {
   const invite = await decodeCode(invitation, "offer");
   if (invite.quizId !== current().session.quizId) throw new Error("That invite belongs to another quiz.");
-  const code = await current().network.acceptInvite(invite);
-  return { link: codeLink(code), inviter: { nodeId: invite.nodeId, username: invite.username } };
+  const response = await current().network.acceptInvite(invite);
+  return { link: codeLink(await encodeCode(response)), inviter: { nodeId: invite.nodeId, username: invite.username } };
 }
 
 /** After a reload: knock on the relay with our own identity. */
@@ -371,7 +414,7 @@ async function main(): Promise<void> {
           peers: node.network.peerStatuses(),
           openInvites: node.network.openInvites(),
           relayedSignals: node.network.relayedSignals,
-          events: node.events(),
+          events: () => current().events(),
           joinLink: RELAY_URL && room ? joinLink(room, state.quiz.quizId) : null,
           door: node.doorStatus(),
           reconnecting: knock !== null,
@@ -379,28 +422,32 @@ async function main(): Promise<void> {
       },
       createQuiz,
       join,
-      cancelJoin: stopKnocking,
+      cancelJoin,
       rejoin,
       reconnect,
       invite: async () => {
-        const { inviteId, code } = await current().network.createInvite();
-        return { inviteId, link: codeLink(code) };
+        const { inviteId, invite } = await current().network.createInvite();
+        return { inviteId, link: codeLink(await encodeCode(invite)) };
       },
       connect: async (text) => current().network.acceptResponse(await decodeCode(text, "answer")),
-      answer: (questionId, key) => {
-        const { round } = current().state().quiz;
-        current().act("ANSWER_SUBMITTED", { round, questionId, answer: key });
+      answer: (question, answer) => {
+        const { round, contentId } = current().state().quiz;
+        current().act("ANSWER_SUBMITTED", { round, contentId, question, answer });
       },
       finish: () => current().act("QUIZ_FINISHED", { round: current().state().quiz.round }),
-      restart: () => current().act("QUIZ_RESTARTED", { round: current().state().quiz.round + 1 }),
+      // Without a quiz: the same questions again.
+      restart: (slug) => {
+        const round = current().state().quiz.round + 1;
+        current().act("QUIZ_RESTARTED", slug ? { round, quiz: findQuiz(slug).quiz } : { round });
+      },
       leave,
     },
-    loadUsername(),
+    { username: loadUsername(), quiz: loadQuizChoice() },
   );
   if (saved) restore(saved);
   window.addEventListener("pagehide", () => {
     knock?.close();
-    node?.close();
+    node?.close(); // also stores the log
   });
   // A link pasted into the address bar of an open quiz tab only changes the "#" part.
   window.addEventListener("hashchange", () => {

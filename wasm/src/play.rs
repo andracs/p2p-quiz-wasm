@@ -1,92 +1,116 @@
 //! Playing: everybody answers the questions at their own pace.
 //!
-//! An answer counts only in the current round, only while that round is open, and
-//! only the first answer of a participant to each question. A player sees their own
-//! results and the leaderboard after answering every question, or once the round is
-//! finished. Until then nobody's answers are revealed to them.
+//! An answer counts only in the current round, only while that round is open, only for
+//! the questions of that round (its content id), and only the first answer of a
+//! participant to each question. As on the cyber-quizzer pages, a player sees right
+//! after answering whether it was right, and why. The leaderboard is live.
+
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Serialize;
+use serde_json::Value;
 
-use crate::content::{Question, QUESTIONS};
-use crate::management::{Lifecycle, Participant, Status};
+use crate::content::{self, Kind, Quiz};
+use crate::management::{Content, Lifecycle, Participant, Status};
 use crate::Event;
 
 pub const ANSWER_SUBMITTED: &str = "ANSWER_SUBMITTED";
 
 struct Answer {
-    node_id: String,
-    question_id: String,
-    key: String,
+    value: Value,
+    correct: bool,
 }
 
 /// The play side of the replayed event log: the accepted answers of the current round.
 pub struct Answers {
     round: u32,
-    list: Vec<Answer>,
+    /// nodeId -> question index -> answer.
+    by_node: HashMap<String, BTreeMap<usize, Answer>>,
+    count: usize,
 }
 
 impl Answers {
     pub fn new() -> Self {
         Answers {
             round: 1,
-            list: Vec::new(),
+            by_node: HashMap::new(),
+            count: 0,
         }
     }
 
     /// Called after `Lifecycle::apply` for the same event.
     pub fn apply(&mut self, e: &Event, quiz: &Lifecycle) {
         if self.round != quiz.round {
-            // A restarted quiz starts again without answers.
+            // A new round starts without answers.
+            *self = Answers::new();
             self.round = quiz.round;
-            self.list.clear();
         }
-        let question_id = e.payload["questionId"].as_str().unwrap_or_default();
-        if e.kind == ANSWER_SUBMITTED
-            && quiz.status == Status::Open
-            && e.round() == Some(quiz.round)
-            && quiz.is_participant(&e.node_id)
-            && self.of(&e.node_id, question_id).is_none()
-        {
-            self.list.push(Answer {
-                node_id: e.node_id.clone(),
-                question_id: question_id.to_owned(),
-                key: e.payload["answer"].as_str().unwrap_or_default().to_owned(),
-            });
+        if let Some((index, answer)) = self.accept(e, quiz) {
+            self.by_node
+                .entry(e.node_id.clone())
+                .or_default()
+                .insert(index, answer);
+            self.count += 1;
         }
     }
 
-    pub fn of(&self, node_id: &str, question_id: &str) -> Option<&str> {
-        let answer = self
-            .list
-            .iter()
-            .find(|a| a.node_id == node_id && a.question_id == question_id);
-        answer.map(|a| a.key.as_str())
+    /// Whether an ANSWER_SUBMITTED event would count right now.
+    pub fn counts(&self, e: &Event, quiz: &Lifecycle) -> bool {
+        self.accept(e, quiz).is_some()
+    }
+
+    fn accept(&self, e: &Event, quiz: &Lifecycle) -> Option<(usize, Answer)> {
+        let content = quiz.content.as_ref()?;
+        let index = e.payload["question"]
+            .as_u64()
+            .and_then(|i| usize::try_from(i).ok())?;
+        let question = content.quiz.spoergsmaal.get(index)?;
+        let counts = e.kind == ANSWER_SUBMITTED
+            && quiz.status == Status::Open
+            && e.round() == Some(quiz.round)
+            && e.payload["contentId"].as_str() == Some(content.id.as_str())
+            && quiz.is_participant(&e.node_id)
+            && self.get(&e.node_id, index).is_none();
+        let grade = question.grade(&e.payload["answer"]).filter(|_| counts)?;
+        let answer = Answer {
+            value: e.payload["answer"].clone(),
+            correct: grade.correct,
+        };
+        Some((index, answer))
+    }
+
+    fn get(&self, node_id: &str, index: usize) -> Option<&Answer> {
+        self.by_node.get(node_id)?.get(&index)
     }
 
     pub fn len(&self) -> usize {
-        self.list.len()
+        self.count
     }
 
     fn answered(&self, node_id: &str) -> usize {
-        self.list.iter().filter(|a| a.node_id == node_id).count()
+        self.by_node.get(node_id).map_or(0, BTreeMap::len)
     }
 
-    fn score(&self, node_id: &str) -> u32 {
-        let correct = |q: &&Question| self.of(node_id, q.id) == Some(q.correct);
-        QUESTIONS.iter().filter(correct).count() as u32
+    fn score(&self, node_id: &str) -> usize {
+        let answers = self.by_node.get(node_id);
+        answers.map_or(0, |a| a.values().filter(|a| a.correct).count())
     }
 
-    fn results(&self, node_id: &str) -> Vec<ResultRow> {
-        QUESTIONS
-            .iter()
-            .map(|q| {
-                let answer = self.of(node_id, q.id);
-                ResultRow {
-                    question: q.text,
-                    answer: answer.and_then(|key| q.label(key)),
-                    correct_answer: q.label(q.correct).unwrap_or_default(),
-                    correct: answer == Some(q.correct),
-                }
+    /// How many answered question `index`, and how many of them got it right.
+    pub fn tally(&self, index: usize) -> (usize, usize) {
+        let answers = self.by_node.values().filter_map(|a| a.get(&index));
+        answers.fold((0, 0), |(n, right), a| {
+            (n + 1, right + usize::from(a.correct))
+        })
+    }
+
+    /// One mark per question: ✅ right, ❌ wrong, ➖ not answered (yet).
+    fn marks(&self, node_id: &str, question_count: usize) -> String {
+        (0..question_count)
+            .map(|i| match self.get(node_id, i) {
+                Some(answer) if answer.correct => '✅',
+                Some(_) => '❌',
+                None => '➖',
             })
             .collect()
     }
@@ -95,26 +119,55 @@ impl Answers {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionView {
-    pub id: &'static str,
-    /// 1-based position, for "Question 2 of 5".
+    /// What an ANSWER_SUBMITTED event refers to: the position of the question in the quiz.
+    pub index: usize,
+    /// 1-based, for "Question 2 of 18".
     pub number: usize,
-    pub text: &'static str,
-    pub options: Vec<OptionView>,
+    /// The section of the quiz, e.g. "📜 Med eller uden aftale".
+    pub section: Option<String>,
+    pub emoji: Option<String>,
+    pub text: String,
+    /// "choice", "truefalse", "order" or "estimate".
+    pub kind: &'static str,
+    /// Choice: the options. Order: the items, shuffled. `id` is what the answer carries.
+    pub options: Vec<Item>,
+    pub estimate: Option<EstimateView>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct OptionView {
-    pub key: &'static str,
-    pub label: &'static str,
+pub struct Item {
+    pub id: usize,
+    pub label: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct EstimateView {
+    pub min: f64,
+    pub max: f64,
+    pub step: f64,
+    pub start: f64,
+    pub unit: String,
+    /// A year: shown without a thousands separator.
+    pub year: bool,
+}
+
+/// One answered question, with the right answer and the explanation.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResultRow {
-    pub question: &'static str,
-    pub answer: Option<&'static str>,
-    pub correct_answer: &'static str,
+pub struct ResultView {
+    pub index: usize,
+    pub number: usize,
+    pub section: Option<String>,
+    pub emoji: Option<String>,
+    pub title: String,
+    pub text: String,
+    pub kind: &'static str,
     pub correct: bool,
+    pub answer: String,
+    pub right_answer: String,
+    /// "3 of 5 in the right place.", "12 % off."
+    pub detail: Option<String>,
+    pub explanation: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,45 +178,35 @@ pub struct ScoreRow {
     pub username: String,
     pub answered: usize,
     pub finished: bool,
-    pub score: u32,
-    /// Per-question answers: empty unless revealed.
-    pub results: Vec<ResultRow>,
+    pub score: usize,
+    /// One mark per question: ✅ right, ❌ wrong, ➖ not answered.
+    pub marks: String,
 }
 
 /// What the play screen of this node shows.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayView {
     pub answered: usize,
+    /// Answered every question.
     pub finished: bool,
     /// The next question to answer. None once everything is answered or the round is finished.
     pub question: Option<QuestionView>,
-    /// Revealed after answering every question, or once the round is finished.
-    pub score: Option<u32>,
-    pub results: Vec<ResultRow>,
-    /// Everyone who answered something, best first. Revealed like `score`.
+    pub score: usize,
+    /// This node's answers so far, in question order.
+    pub results: Vec<ResultView>,
+    /// Everyone who answered something, best first.
     pub leaderboard: Vec<ScoreRow>,
 }
 
 pub fn view(quiz: &Lifecycle, answers: &Answers, me: &str) -> PlayView {
-    let answered = answers.answered(me);
-    let finished = answered == QUESTIONS.len();
-    let reveal = finished || quiz.status == Status::Finished;
+    let Some(content) = &quiz.content else {
+        return PlayView::default(); // the quiz itself has not arrived yet
+    };
+    let count = content.quiz.spoergsmaal.len();
     let open = quiz.status == Status::Open && quiz.is_participant(me);
-    let next = QUESTIONS
-        .iter()
-        .enumerate()
-        .find(|(_, q)| answers.of(me, q.id).is_none());
-    let question = next.filter(|_| open).map(|(i, q)| QuestionView {
-        id: q.id,
-        number: i + 1,
-        text: q.text,
-        options: q
-            .options
-            .iter()
-            .map(|&(key, label)| OptionView { key, label })
-            .collect(),
-    });
+    let next = (0..count).find(|&i| answers.get(me, i).is_none());
+    let seed = |i: usize| format!("{me}|{}|{}|{i}", quiz.round, content.id);
     let players: Vec<Participant> = quiz
         .participants
         .iter()
@@ -171,25 +214,83 @@ pub fn view(quiz: &Lifecycle, answers: &Answers, me: &str) -> PlayView {
         .cloned()
         .collect();
     PlayView {
-        answered,
-        finished,
-        question,
-        score: reveal.then(|| answers.score(me)),
-        results: if reveal {
-            answers.results(me)
-        } else {
-            Vec::new()
-        },
-        leaderboard: if reveal {
-            ranking(answers, &players, true)
-        } else {
-            Vec::new()
-        },
+        answered: answers.answered(me),
+        finished: next.is_none(),
+        question: next
+            .filter(|_| open)
+            .map(|i| question_view(content, i, &seed(i))),
+        score: answers.score(me),
+        results: (0..count)
+            .filter_map(|i| Some(result_view(&content.quiz, i, answers.get(me, i)?)))
+            .collect(),
+        leaderboard: ranking(answers, &players, count),
+    }
+}
+
+fn question_view(content: &Content, index: usize, seed: &str) -> QuestionView {
+    let q = &content.quiz.spoergsmaal[index];
+    let (options, estimate) = match &q.kind {
+        Kind::Choice { svar, .. } => (items(svar, 0..svar.len()), None),
+        Kind::TrueFalse { .. } => (Vec::new(), None),
+        Kind::Order { elementer } => {
+            let order = content::shuffled(elementer.len(), seed);
+            (items(elementer, order), None)
+        }
+        Kind::Estimate(e) => {
+            // As on the cyber-quizzer pages: snapped to the step, within the slider.
+            let start = e.start.unwrap_or((e.min + e.max) / 2.0);
+            let start = ((start / e.trin).round() * e.trin).clamp(e.min, e.max);
+            let view = EstimateView {
+                min: e.min,
+                max: e.max,
+                step: e.trin,
+                start,
+                unit: e.enhed.clone(),
+                year: e.aar,
+            };
+            (Vec::new(), Some(view))
+        }
+    };
+    QuestionView {
+        index,
+        number: index + 1,
+        section: content.quiz.section(q),
+        emoji: q.emoji.clone(),
+        text: q.tekst.clone(),
+        kind: q.kind_name(),
+        options,
+        estimate,
+    }
+}
+
+fn items(labels: &[String], order: impl IntoIterator<Item = usize>) -> Vec<Item> {
+    let item = |id: usize| Item {
+        id,
+        label: labels[id].clone(),
+    };
+    order.into_iter().map(item).collect()
+}
+
+fn result_view(quiz: &Quiz, index: usize, answer: &Answer) -> ResultView {
+    let q = &quiz.spoergsmaal[index];
+    ResultView {
+        index,
+        number: index + 1,
+        section: quiz.section(q),
+        emoji: q.emoji.clone(),
+        title: q.title(),
+        text: q.tekst.clone(),
+        kind: q.kind_name(),
+        correct: answer.correct,
+        answer: q.label(&answer.value),
+        right_answer: q.right_answer(),
+        detail: q.grade(&answer.value).and_then(|grade| grade.detail),
+        explanation: q.forklaring.clone(),
     }
 }
 
 /// Best score first, then username alphabetically (nodeId only breaks exact ties).
-pub fn ranking(answers: &Answers, people: &[Participant], reveal: bool) -> Vec<ScoreRow> {
+pub fn ranking(answers: &Answers, people: &[Participant], question_count: usize) -> Vec<ScoreRow> {
     let mut rows: Vec<ScoreRow> = people
         .iter()
         .map(|p| ScoreRow {
@@ -197,13 +298,9 @@ pub fn ranking(answers: &Answers, people: &[Participant], reveal: bool) -> Vec<S
             node_id: p.node_id.clone(),
             username: p.username.clone(),
             answered: answers.answered(&p.node_id),
-            finished: answers.answered(&p.node_id) == QUESTIONS.len(),
+            finished: question_count > 0 && answers.answered(&p.node_id) == question_count,
             score: answers.score(&p.node_id),
-            results: if reveal {
-                answers.results(&p.node_id)
-            } else {
-                Vec::new()
-            },
+            marks: answers.marks(&p.node_id, question_count),
         })
         .collect();
     rows.sort_by(|a, b| {

@@ -22,6 +22,14 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return element;
 }
 
+/** Quiz text, where *words in stars* are in italics (as on the cyber-quizzer pages). */
+export function rich(text: string): Node[] {
+  return text
+    .split(/(\*[^*]+\*)/g)
+    .filter((part) => part !== "")
+    .map((part) => (/^\*[^*]+\*$/.test(part) ? el("em", part.slice(1, -1)) : document.createTextNode(part)));
+}
+
 /** Rebuild an element's children only when their data changed, so a click is never lost to a re-render. */
 const lastRendered = new Map<string, string>();
 export function update(id: string, data: unknown, build: () => Node[]): void {

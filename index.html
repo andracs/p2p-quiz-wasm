@@ -48,6 +48,7 @@
         font-weight: 600;
       }
       input,
+      select,
       textarea {
         width: 100%;
         padding: 10px 12px;
@@ -66,6 +67,10 @@
       }
       textarea {
         resize: vertical;
+      }
+      input[type="range"] {
+        padding: 0;
+        border: 0;
       }
       button {
         display: block;
@@ -89,21 +94,56 @@
         padding: 0;
       }
       .rows li,
-      .results li {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
+      .review li {
         padding: 8px 0;
         border-bottom: 1px solid var(--line);
       }
-      .results li span:last-child,
-      .rows li span:last-child,
+      .rows li,
+      .rows li > div:first-child,
+      .ends,
+      .pair {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .rows li:has(.marks) {
+        display: block;
+      }
+      .rows span:last-child,
       .muted {
         color: var(--muted);
       }
-      .results li span:last-child,
-      .rows li span:last-child {
+      .rows span:last-child {
         text-align: right;
+      }
+      .marks {
+        font-size: 13px;
+        letter-spacing: 1px;
+        word-break: break-all;
+      }
+      .question-emoji {
+        margin: 8px 0 0;
+        font-size: 2.5rem;
+      }
+      .verdict {
+        font-size: 1.3rem;
+        font-weight: 700;
+      }
+      .guess {
+        display: block;
+        margin: 16px 0 8px;
+        font-size: 2rem;
+        font-weight: 700;
+        text-align: center;
+      }
+      .ends {
+        margin: 0;
+      }
+      .review details {
+        margin: 0;
+      }
+      .review summary {
+        color: inherit;
       }
       .or {
         margin: 24px 0 0;
@@ -115,6 +155,10 @@
         font-size: 1.5rem;
         font-weight: 700;
       }
+      .quiz-title {
+        margin: 4px 0 0;
+        font-weight: 600;
+      }
       .tabs {
         display: flex;
         gap: 10px;
@@ -122,16 +166,6 @@
       }
       .tabs button[aria-pressed="true"] {
         border: 2px solid var(--pressed);
-      }
-      .score-row {
-        display: flex;
-        justify-content: space-between;
-        text-align: left;
-      }
-      .details {
-        margin: 0 0 12px;
-        padding: 8px 18px;
-        border-left: 4px solid var(--line);
       }
       .error {
         color: var(--error);
@@ -171,6 +205,9 @@
         <label for="username">👤 Your name:</label>
         <input id="username" type="text" autocomplete="off" spellcheck="false" />
         <div id="create-section">
+          <label for="quiz-choice">📚 Quiz:</label>
+          <select id="quiz-choice"></select>
+          <p id="quiz-info" class="muted"></p>
           <button id="create">✨ CREATE QUIZ</button>
           <p class="or">or</p>
           <label for="invite-code">🔗 Join link or invite code:</label>
@@ -216,6 +253,7 @@
 
       <section id="quiz" hidden>
         <p class="quiz-name">🧩 <span id="quiz-name"></span></p>
+        <p id="quiz-title" class="quiz-title"></p>
         <p id="quiz-meta" class="muted"></p>
 
         <div id="rejoin-panel" hidden>
@@ -232,21 +270,29 @@
           <button id="tab-manage">🛠️ Manage</button>
         </nav>
 
-        <!-- 🎮 Play: answer at your own pace. -->
+        <!-- 🎮 Play: one question at a time, at your own pace, with the explanation after each answer. -->
         <div id="play-view">
           <div id="play-question" hidden>
             <p id="question-progress" class="muted"></p>
+            <p id="question-emoji" class="question-emoji" aria-hidden="true"></p>
             <h2 id="question-text"></h2>
-            <div id="options"></div>
+            <div id="answer-area"></div>
+            <div id="feedback" hidden>
+              <p id="verdict" class="verdict" role="status"></p>
+              <div id="feedback-answers"></div>
+              <p id="explanation"></p>
+              <button id="next-question">➡️ NEXT QUESTION</button>
+            </div>
           </div>
           <div id="play-result" hidden>
             <h2 id="score-title"></h2>
-            <ul id="my-results" class="results"></ul>
+            <p id="review-hint" class="muted">Tap a question to see it again.</p>
+            <ol id="my-results" class="review"></ol>
           </div>
           <p id="play-note" class="muted"></p>
           <div id="leaderboard-box" hidden>
             <h2>🏆 Leaderboard</h2>
-            <ol id="scores"></ol>
+            <ol id="scores" class="rows"></ol>
           </div>
         </div>
 
@@ -283,19 +329,25 @@
           </details>
 
           <h2>👥 Players</h2>
+          <p class="muted">✅ right · ❌ wrong · ➖ not answered yet</p>
           <ul id="players" class="rows"></ul>
           <p id="answer-total" class="muted"></p>
+
+          <h2>📊 Questions</h2>
+          <ol id="question-stats" class="rows"></ol>
 
           <h2>🎛️ Quiz</h2>
           <p id="quiz-status"></p>
           <button id="finish">🏁 FINISH QUIZ</button>
-          <button id="restart">🔄 RESTART (NEW ROUND)</button>
+          <label for="next-quiz">Quiz for a new round:</label>
+          <select id="next-quiz"></select>
+          <button id="restart">🔄 START A NEW ROUND</button>
         </div>
 
         <button id="leave">🚪 LEAVE QUIZ</button>
       </section>
 
-      <details>
+      <details id="debug">
         <summary>🐞 Debug</summary>
         <pre id="debug-output"></pre>
       </details>

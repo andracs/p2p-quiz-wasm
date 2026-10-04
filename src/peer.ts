@@ -6,8 +6,8 @@
 import {
   CHANNEL_LABEL,
   createMessage,
-  encodeCode,
   parseMessage,
+  slimSdp,
   type BootstrapCode,
   type HelloPayload,
   type Message,
@@ -35,6 +35,8 @@ interface Peer {
 export interface PeerStatus extends PeerInfo {
   /** State of the DataChannel to this peer: CONNECTING, OPEN, CLOSING or CLOSED. */
   state: string;
+  /** How far ICE got in finding a network path, for the debug panel. */
+  ice: RTCIceConnectionState;
 }
 
 export interface NetworkHandlers {
@@ -63,8 +65,8 @@ export class PeerNetwork {
 
   // --- Manual bootstrap: invite code, then response code ----------------------
 
-  /** Any node in the quiz: create an offer and wrap it in an invite code. Each invite is for one node. */
-  async createInvite(): Promise<{ inviteId: string; code: string }> {
+  /** Any node in the quiz: create an offer for one new node. */
+  async createInvite(): Promise<{ inviteId: string; invite: BootstrapCode }> {
     if (this.closed) throw new Error("This node has left the quiz.");
     const pc = new RTCPeerConnection(RTC_CONFIG);
     const channel = pc.createDataChannel(CHANNEL_LABEL);
@@ -72,11 +74,8 @@ export class PeerNetwork {
     await iceGatheringComplete(pc);
     const inviteId = crypto.randomUUID();
     this.invites.set(inviteId, { pc, channel });
-    const sdp = pc.localDescription!.sdp;
-    return {
-      inviteId,
-      code: await encodeCode({ version: 1, type: "offer", inviteId, quizId: this.quizId, ...this.self, sdp }),
-    };
+    const sdp = slimSdp(pc.localDescription!.sdp);
+    return { inviteId, invite: { version: 1, type: "offer", inviteId, quizId: this.quizId, ...this.self, sdp } };
   }
 
   /** Invites of this node that are still waiting for their response. */
@@ -84,21 +83,14 @@ export class PeerNetwork {
     return [...this.invites.keys()];
   }
 
-  /** New node: accept an invite code and create the response code. */
-  async acceptInvite(invite: BootstrapCode): Promise<string> {
+  /** New node: accept an invite and create the response. */
+  async acceptInvite(invite: BootstrapCode): Promise<BootstrapCode> {
     const peer = this.addPeer({ nodeId: invite.nodeId, username: invite.username }, new RTCPeerConnection(RTC_CONFIG));
     await peer.pc.setRemoteDescription({ type: "offer", sdp: invite.sdp });
     await peer.pc.setLocalDescription(await peer.pc.createAnswer());
     await iceGatheringComplete(peer.pc);
-    const sdp = peer.pc.localDescription!.sdp;
-    return encodeCode({
-      version: 1,
-      type: "answer",
-      inviteId: invite.inviteId,
-      quizId: this.quizId,
-      ...this.self,
-      sdp,
-    });
+    const sdp = slimSdp(peer.pc.localDescription!.sdp);
+    return { version: 1, type: "answer", inviteId: invite.inviteId, quizId: this.quizId, ...this.self, sdp };
   }
 
   /** Inviting node: apply the response code. The DataChannel opens shortly after. */
@@ -140,7 +132,11 @@ export class PeerNetwork {
   // --- Status -------------------------------------------------------------------
 
   peerStatuses(): PeerStatus[] {
-    return [...this.peers.values()].map((peer) => ({ ...peer.info, state: channelState(peer).toUpperCase() }));
+    return [...this.peers.values()].map((peer) => ({
+      ...peer.info,
+      state: channelState(peer).toUpperCase(),
+      ice: peer.pc.iceConnectionState,
+    }));
   }
 
   isOpen(nodeId: string): boolean {

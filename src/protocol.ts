@@ -105,8 +105,23 @@ export interface BootstrapCode {
 
 /** JSON -> deflate -> base64url, prefixed with "p2pq1:". */
 export async function encodeCode(code: BootstrapCode): Promise<string> {
-  const json = new TextEncoder().encode(JSON.stringify(code));
-  return CODE_PREFIX + toBase64Url(await pipe(json, new CompressionStream("deflate-raw")));
+  return CODE_PREFIX + toBase64Url(await compress(JSON.stringify(code)));
+}
+
+/**
+ * Leaves out what a link between two browsers practically never needs: TCP candidates
+ * (browsers connect over UDP; without a TURN server TCP hardly ever helps) and optional
+ * attributes. A laptop with many network interfaces otherwise makes codes of several KB.
+ */
+export function slimSdp(sdp: string): string {
+  return sdp
+    .split("\r\n")
+    .filter((line) => !/^a=candidate:\S+ \d+ tcp /i.test(line))
+    .filter((line) => !line.startsWith("a=extmap-allow-mixed") && !line.startsWith("a=msid-semantic"))
+    .map((line) =>
+      line.startsWith("a=candidate:") ? line.replace(/ (generation|network-id|network-cost) \S+/g, "") : line,
+    )
+    .join("\r\n");
 }
 
 /** A link to this page that carries a code after the "#". That part never leaves the browser. */
@@ -118,20 +133,35 @@ export function codeLink(code: string): string {
 export async function decodeCode(text: string, expected?: BootstrapCode["type"]): Promise<BootstrapCode> {
   const data = new RegExp(`${CODE_PREFIX}([A-Za-z0-9_-]+)`).exec(text.replace(/\s+/g, ""))?.[1];
   if (!data) throw new Error(`Paste a link or a code (it contains "${CODE_PREFIX}").`);
-  let code: BootstrapCode;
+  let code: unknown;
   try {
-    const json = await pipe(fromBase64Url(data), new DecompressionStream("deflate-raw"));
-    code = JSON.parse(new TextDecoder().decode(json));
+    code = JSON.parse(await decompress(fromBase64Url(data)));
   } catch {
     throw new Error("This link or code is damaged or incomplete. Copy it again.");
   }
-  if (code.version !== 1 || (code.type !== "offer" && code.type !== "answer")) {
+  return checkCode(code, expected);
+}
+
+/** Makes sure an invite or response (from a link or from the relay) looks right. */
+export function checkCode(code: unknown, expected?: BootstrapCode["type"]): BootstrapCode {
+  const c = code as Partial<BootstrapCode> | null;
+  if (c?.version !== 1 || (c.type !== "offer" && c.type !== "answer") || typeof c.sdp !== "string") {
     throw new Error("This is not a P2P Quiz Wasm link.");
   }
-  if (expected && code.type !== expected) {
+  if (expected && c.type !== expected) {
     throw new Error(expected === "offer" ? "That is a response, not an invite." : "That is an invite, not a response.");
   }
-  return code;
+  return c as BootstrapCode;
+}
+
+/** Text -> deflate-raw bytes. */
+export async function compress(text: string): Promise<Uint8Array<ArrayBuffer>> {
+  return pipe(new TextEncoder().encode(text), new CompressionStream("deflate-raw"));
+}
+
+/** deflate-raw bytes -> text. */
+export async function decompress(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  return new TextDecoder().decode(await pipe(bytes, new DecompressionStream("deflate-raw")));
 }
 
 async function pipe(bytes: Uint8Array<ArrayBuffer>, transform: CompressionStream | DecompressionStream) {

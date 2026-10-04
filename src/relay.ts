@@ -12,7 +12,15 @@
 //      │ ◄═══════════════ WebRTC DataChannel, then the usual mesh ═══════════► │
 
 import type { PeerNetwork } from "./peer";
-import { decodeCode, fromBase64Url, toBase64Url, type BootstrapCode, type PeerInfo } from "./protocol";
+import {
+  checkCode,
+  compress,
+  decompress,
+  fromBase64Url,
+  toBase64Url,
+  type BootstrapCode,
+  type PeerInfo,
+} from "./protocol";
 
 /** The ntfy server. Use ?relay=https://… for a self-hosted one, or ?relay=off to switch it off. */
 export const RELAY_URL: string | null = (() => {
@@ -44,12 +52,19 @@ export function parseJoinLink(text: string): { room: Room; quizPrefix: string } 
 
 type RelayMessage =
   | { kind: "knock"; from: string; username: string }
-  | { kind: "offer" | "answer"; from: string; to: string; code: string };
+  | { kind: "offer" | "answer"; from: string; to: string; code: BootstrapCode };
 
-/** Encrypted messages on one ntfy topic: publish with POST, receive with server-sent events. */
-class Relay {
+/** ntfy.sh turns message bodies over 4096 bytes into file attachments: stay well below. */
+const MAX_BODY = 3800;
+
+/**
+ * Encrypted messages on one ntfy topic: publish with POST, receive with server-sent events.
+ * A message is compressed, encrypted and base64url-encoded; a long one goes out in parts.
+ */
+export class Relay {
   private source: EventSource | null = null;
   private readonly key: Promise<CryptoKey>;
+  private readonly parts = new Map<string, string[]>();
 
   constructor(
     private readonly room: Room,
@@ -69,26 +84,51 @@ class Relay {
       };
       source.onmessage = async (event) => {
         const data = JSON.parse(event.data);
-        if (data.event !== "message") return;
-        const message = await this.open(data.message).catch(() => null); // not ours, or damaged
+        if (data.event !== "message" || typeof data.message !== "string") return;
+        const sealed = this.reassemble(data.message);
+        if (sealed === null) return; // more parts to come
+        const message = await this.open(sealed).catch(() => null); // not ours, or damaged
         if (message) this.onMessage(message, Date.now() / 1000 - data.time);
       };
     });
   }
 
   async send(message: RelayMessage): Promise<void> {
-    const response = await fetch(`${RELAY_URL}/${this.room.topic}`, { method: "POST", body: await this.seal(message) });
-    if (response.status === 429) throw new Error("The relay is busy (too many requests). Try again in a minute.");
-    if (!response.ok) throw new Error(`The relay answered ${response.status}.`);
+    const sealed = await this.seal(message);
+    // A sealed message has no dots, so parts can be "<id>.<index>.<count>.<piece>".
+    const size = MAX_BODY - 32;
+    const count = Math.ceil(sealed.length / size);
+    const id = toBase64Url(crypto.getRandomValues(new Uint8Array(6)));
+    const piece = (i: number) => sealed.slice(i * size, (i + 1) * size);
+    const bodies = count === 1 ? [sealed] : Array.from({ length: count }, (_, i) => `${id}.${i}.${count}.${piece(i)}`);
+    for (const body of bodies) {
+      const response = await fetch(`${RELAY_URL}/${this.room.topic}`, { method: "POST", body });
+      if (response.status === 429) throw new Error("The relay is busy (too many requests). Try again in a minute.");
+      if (!response.ok) throw new Error(`The relay answered ${response.status}.`);
+    }
   }
 
   close(): void {
     this.source?.close();
   }
 
+  /** The whole sealed text: right away, or once every part of a split message is in. */
+  private reassemble(body: string): string | null {
+    const part = /^([-\w]{8})\.(\d+)\.(\d+)\.([-\w]+)$/.exec(body);
+    if (!part) return body;
+    const [index, count] = [Number(part[2]), Number(part[3])];
+    if (count > 20 || index >= count) return null;
+    const pieces = this.parts.get(part[1]) ?? new Array<string>(count).fill("");
+    pieces[index] = part[4];
+    this.parts.set(part[1], pieces);
+    if (pieces.some((p) => p === "")) return null;
+    this.parts.delete(part[1]);
+    return pieces.join("");
+  }
+
   private async seal(message: RelayMessage): Promise<string> {
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const plain = new TextEncoder().encode(JSON.stringify(message));
+    const plain = await compress(JSON.stringify(message));
     const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await this.key, plain));
     const bytes = new Uint8Array(iv.length + sealed.length);
     bytes.set(iv);
@@ -100,7 +140,7 @@ class Relay {
     const bytes = fromBase64Url(text);
     const iv = bytes.slice(0, 12);
     const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, await this.key, bytes.slice(12));
-    return JSON.parse(new TextDecoder().decode(plain));
+    return JSON.parse(await decompress(new Uint8Array(plain)));
   }
 }
 
@@ -142,32 +182,36 @@ export class Doorman {
     const recently = Date.now() - (this.offeredAt.get(to) ?? 0) < 10_000;
     if (this.closed || recently) return;
     this.offeredAt.set(to, Date.now());
-    const { code } = await this.network.createInvite();
-    await this.relay.send({ kind: "offer", from: this.self.nodeId, to, code }).catch((e) => console.warn(e));
+    const { invite } = await this.network.createInvite();
+    await this.relay.send({ kind: "offer", from: this.self.nodeId, to, code: invite }).catch((e) => console.warn(e));
   }
 
-  private async accept(code: string): Promise<void> {
-    const response = await decodeCode(code, "answer").catch(() => null);
-    if (response && this.network.openInvites().includes(response.inviteId)) {
-      await this.network.acceptResponse(response).catch((e) => console.warn("doorman:", e));
+  private async accept(code: BootstrapCode): Promise<void> {
+    try {
+      const response = checkCode(code, "answer");
+      if (this.network.openInvites().includes(response.inviteId)) await this.network.acceptResponse(response);
+    } catch (error) {
+      console.warn("doorman:", error);
     }
   }
 }
 
 /**
  * A newcomer (or a reloaded node) knocks every 15 seconds until an online node sends an
- * offer. `answer` turns that offer into a response code, which goes back over the relay.
+ * offer. `answer` turns that offer into a response, which goes back over the relay.
+ * `onStatus` keeps the person informed, also when something goes wrong.
  */
 export class Knock {
   private readonly relay: Relay;
   private timer: ReturnType<typeof setInterval> | undefined;
   private busy = false;
+  private closed = false;
 
   constructor(
     room: Room,
     private readonly self: PeerInfo,
-    private readonly answer: (offer: BootstrapCode) => Promise<string>,
-    private readonly onProblem: (problem: string) => void,
+    private readonly answer: (offer: BootstrapCode) => Promise<BootstrapCode>,
+    private readonly onStatus: (status: string) => void,
   ) {
     this.relay = new Relay(room, (message) => void this.onMessage(message));
   }
@@ -177,26 +221,38 @@ export class Knock {
     const knock = () =>
       this.relay
         .send({ kind: "knock", from: this.self.nodeId, username: this.self.username })
-        .catch((error) => this.onProblem(error.message));
+        .catch((error) => this.report(`⚠️ ${error.message} Still trying…`));
     await knock();
     this.timer = setInterval(() => !this.busy && knock(), 15_000);
   }
 
   close(): void {
+    this.closed = true;
     clearInterval(this.timer);
     this.relay.close();
   }
 
+  private report(status: string): void {
+    if (!this.closed) this.onStatus(status);
+  }
+
   private async onMessage(message: RelayMessage): Promise<void> {
-    if (message.kind !== "offer" || message.to !== this.self.nodeId || this.busy) return;
+    if (message.kind !== "offer" || message.to !== this.self.nodeId || this.busy || this.closed) return;
     this.busy = true; // take the first offer only
+    let inviter = "";
     try {
-      const code = await this.answer(await decodeCode(message.code, "offer"));
-      await this.relay.send({ kind: "answer", from: this.self.nodeId, to: message.from, code });
+      const offer = checkCode(message.code, "offer");
+      inviter = offer.username;
+      this.report(`🤝 Connecting to ${inviter}…`);
+      const response = await this.answer(offer);
+      await this.relay.send({ kind: "answer", from: this.self.nodeId, to: message.from, code: response });
     } catch (error) {
-      this.onProblem(error instanceof Error ? error.message : String(error));
+      this.report(`⚠️ ${error instanceof Error ? error.message : error} Still trying…`);
     }
-    // If no link opens within 20 seconds, knock again: some other online node may do better.
-    setTimeout(() => (this.busy = false), 20_000);
+    // Still no link after 15 seconds: say so, and knock again (perhaps another node does better).
+    setTimeout(() => {
+      this.report(`⚠️ No direct connection${inviter ? ` to ${inviter}` : ""} yet. Trying again…`);
+      this.busy = false;
+    }, 15_000);
   }
 }

@@ -1,0 +1,366 @@
+{
+  "emoji": "🛡️",
+  "titel": "Beskyttelse af it-systemer",
+  "undertitel": "Opsamling i Systemsikkerhed",
+  "fag": "Systemsikkerhed",
+  "runder": [
+    {
+      "id": 1,
+      "navn": "Hvem er du?",
+      "emoji": "🪪"
+    },
+    {
+      "id": 2,
+      "navn": "Nogen er inde",
+      "emoji": "🚨"
+    },
+    {
+      "id": 3,
+      "navn": "Skyen er bare en andens computer",
+      "emoji": "☁️"
+    },
+    {
+      "id": 4,
+      "navn": "Fredag morgen, serveren er død",
+      "emoji": "🔥"
+    },
+    {
+      "id": 5,
+      "navn": "Finale",
+      "emoji": "🏁"
+    }
+  ],
+  "spoergsmaal": [
+    {
+      "runde": 1,
+      "type": "mc",
+      "emoji": "🔢",
+      "titel": "Hvor mange faktorer?",
+      "tekst": "Hvilket login er *ikke* ægte 2FA?",
+      "svar": [
+        "Password + kode fra authenticator-app",
+        "Password + fingeraftryk",
+        "Password + \"Hvad hed dit første kæledyr?\"",
+        "Sikkerhedsnøgle (fx YubiKey) + PIN"
+      ],
+      "rigtigt": 2,
+      "forklaring": "Faktorer tæller i kategorier: noget du *ved*, *har* eller *er*. Password og sikkerhedsspørgsmål er begge noget du ved, altså stadig én faktor."
+    },
+    {
+      "runde": 1,
+      "type": "mc",
+      "emoji": "📱",
+      "titel": "MitID gjorde sit arbejde",
+      "tekst": "Du logger ind på en kommunal selvbetjening med MitID. Hvad har MitID klaret for dig?",
+      "svar": [
+        "Autentifikation",
+        "Autorisation",
+        "Både autentifikation og autorisation",
+        "Logning af hvem der har set din sag"
+      ],
+      "rigtigt": 0,
+      "forklaring": "MitID fastslår *hvem* du er. Hvad du så må se, rette eller underskrive, afgør myndighedens egen adgangsstyring. Først identitet, så rettigheder."
+    },
+    {
+      "runde": 1,
+      "type": "mc",
+      "emoji": "🔒",
+      "titel": "Opskriften på en hærdet server",
+      "tekst": "Du skal hærde en ny Ubuntu-server med Docker og PostgreSQL. Hvor finder du community-skrevne anbefalinger til sikker konfiguration af netop de systemer?",
+      "svar": [
+        "OWASP Top 10",
+        "MITRE ATT&CK",
+        "CVE-databasen",
+        "CIS Benchmarks"
+      ],
+      "rigtigt": 3,
+      "forklaring": "CIS Benchmarks er security baselines til over 100 systemer, ofte med build kits til automatisk opsætning. OWASP lister risici i webapps, ATT&CK angriberteknikker, CVE konkrete sårbarheder."
+    },
+    {
+      "runde": 1,
+      "type": "sandtfalsk",
+      "emoji": "📧",
+      "titel": "Hængelåsen i mailen",
+      "tekst": "Når forbindelsen mellem mailserverne er krypteret med TLS, kan kun afsender og modtager læse mailen.",
+      "rigtigt": false,
+      "forklaring": "TLS beskytter kun transporten. På hver mailserver ligger mailen læsbart, og administratorer kan læse med. Bogens billede er et åbent postkort. Kun ende-til-ende (S/MIME, PGP) holder indholdet hemmeligt hele vejen."
+    },
+    {
+      "runde": 2,
+      "type": "mc",
+      "emoji": "🌙",
+      "titel": "Klokken 02.13",
+      "tekst": "Klokken 02.13 genkender et system en kendt exploit-signatur i trafikken og dropper pakkerne automatisk. Ingen er vågne. Hvad er det?",
+      "svar": [
+        "IDS",
+        "IPS",
+        "SIEM",
+        "Honeypot"
+      ],
+      "rigtigt": 1,
+      "forklaring": "IDS opdager og alarmerer, IPS griber selv ind. Prisen for automatikken er falske positiver: et IPS kan blokere legitim trafik, som en vågen administrator ville have genkendt."
+    },
+    {
+      "runde": 2,
+      "type": "mc",
+      "emoji": "💶",
+      "titel": "Lønbogholderen",
+      "tekst": "Lønbogholderen logger ind med sit helt gyldige login kl. 03.40 en lørdag og trækker 40 GB kundedata. Ingen malware, ingen kendte signaturer. Hvad er bedst til at opdage det?",
+      "svar": [
+        "Netværksfirewall",
+        "Signaturbaseret IDS",
+        "Spamfilter",
+        "UEBA"
+      ],
+      "rigtigt": 3,
+      "forklaring": "Der er ingen signatur at matche. UEBA lærer, hvad der er normalt for hver bruger og enhed, og slår alarm ved afvigelser. Stærkt mod insidere og stjålne, gyldige logins. Resultatet føder typisk SIEM'en."
+    },
+    {
+      "runde": 2,
+      "type": "mc",
+      "emoji": "🦊",
+      "titel": "Wazuh",
+      "tekst": "Hvad er Wazuh?",
+      "svar": [
+        "Open source SIEM/XDR-platform",
+        "Et wi-fi-angrebsværktøj i Kali",
+        "En passwordmanager",
+        "En VPN-protokol"
+      ],
+      "rigtigt": 0,
+      "forklaring": "Wazuh samler logs og agentdata fra endpoints, korrelerer hændelser og alarmerer. Udsprunget af OSSEC, som kapitlet nævner."
+    },
+    {
+      "runde": 2,
+      "type": "mc",
+      "emoji": "📺",
+      "titel": "Smart-TV'et i mødelokalet",
+      "tekst": "En angriber har fået fodfæste på smart-TV'et i mødelokalet. Netværket er fladt. Hvad gør det sværest for ham at nå økonomiserveren?",
+      "svar": [
+        "Segmentering, så IoT ligger på eget segment bag en firewall",
+        "Skjult SSID på wi-fi'et",
+        "MAC-filtrering på switchen",
+        "Antivirus på økonomiafdelingens pc'er"
+      ],
+      "rigtigt": 0,
+      "forklaring": "Hoppet fra enhed til enhed hedder *lateral movement*. På et fladt LAN kan alle se alle. Segmentering tvinger trafikken gennem et punkt, der kan logge og blokere. Skjult SSID og MAC-filter stopper ikke én, der allerede er inde."
+    },
+    {
+      "runde": 2,
+      "type": "mc",
+      "emoji": "🚧",
+      "titel": "DMZ",
+      "tekst": "Hvilken server hører hjemme i DMZ'en?",
+      "svar": [
+        "Domain controlleren",
+        "Den offentlige webserver",
+        "Backupserveren",
+        "HR's filserver"
+      ],
+      "rigtigt": 1,
+      "forklaring": "DMZ er til det, der skal kunne nås udefra: web, mail, DNS. Bliver den kompromitteret, står der stadig en firewall mellem angriberen og det interne net."
+    },
+    {
+      "runde": 2,
+      "type": "mc",
+      "emoji": "🙅",
+      "titel": "Never trust",
+      "tekst": "Hvad er kerneideen i zero trust?",
+      "svar": [
+        "Firewallen holder angribere ude, alt indenfor er betroet",
+        "Kun administratorer får adgang til noget",
+        "Intet er betroet pga. placering, hver adgang verificeres",
+        "Firewalls er afskaffet"
+      ],
+      "rigtigt": 2,
+      "forklaring": "A er den klassiske perimetermodel, og den er netop problemet: streng udadtil, slap indadtil, så en angriber med fodfæste går frit rundt. I zero trust skal hver enhed og hver forespørgsel bevise sig."
+    },
+    {
+      "runde": 2,
+      "type": "sandtfalsk",
+      "emoji": "📡",
+      "titel": "Skjult SSID",
+      "tekst": "Et skjult SSID forhindrer en målrettet angriber i at finde jeres wi-fi.",
+      "rigtigt": false,
+      "forklaring": "Klienterne råber selv netværksnavnet ud, når de leder efter det. Skjult SSID hjælper mod tilfældige forbipasserende, ikke mod wardriving."
+    },
+    {
+      "runde": 2,
+      "type": "mc",
+      "emoji": "🔍",
+      "titel": "Shodan",
+      "tekst": "Hvad er Shodan?",
+      "svar": [
+        "Et IoT-botnet",
+        "En søgemaskine for internetforbundne enheder",
+        "En pentest-distro",
+        "En open source SIEM"
+      ],
+      "rigtigt": 1,
+      "forklaring": "Shodan finder webcams, routere og industrianlæg, der står åbne. Også titusindvis i Danmark. Kapitlets eksempel: et kamera, der streamer en carport til hele verden."
+    },
+    {
+      "runde": 3,
+      "type": "raekkefoelge",
+      "emoji": "🩹",
+      "titel": "Hvem patcher hvad?",
+      "tekst": "Sortér fra *mest* til *mindst* eget drifts- og sikkerhedsansvar.",
+      "elementer": [
+        "On-premises",
+        "IaaS",
+        "PaaS",
+        "SaaS"
+      ],
+      "forklaring": "On-prem ejer I alt. IaaS: I har OS og op. PaaS: I har applikation og data. SaaS: I har \"kun\" data, brugere og adgang. Og det er dér, det oftest går galt."
+    },
+    {
+      "runde": 3,
+      "type": "mc",
+      "emoji": "🔗",
+      "titel": "\"Alle med linket\"",
+      "tekst": "I bruger Microsoft 365. En kollega deler en mappe med kundedata via et \"alle med linket\"-link, og den bliver fundet. Hvem har ansvaret?",
+      "svar": [
+        "Microsoft",
+        "Jer",
+        "Delt ligeligt",
+        "Kollegaen personligt"
+      ],
+      "rigtigt": 1,
+      "forklaring": "Selv i SaaS er data, identiteter, rettigheder og klienter kundens ansvar. Ifølge kapitlet skyldes de fleste cloud-hændelser fejlkonfiguration og menneskelige fejl. Organisationen er dataansvarlig, ikke kollegaen."
+    },
+    {
+      "runde": 3,
+      "type": "mc",
+      "emoji": "📊",
+      "titel": "Budget_FINAL_v7_rigtig_final.xlsx",
+      "tekst": "Fællesdrevet rummer 14 kopier af \"Budget_FINAL_v7_rigtig_final.xlsx\" fra 2019, som ingen bruger. Hvad kalder kapitlet det?",
+      "svar": [
+        "Dark data",
+        "Big data",
+        "ROT-data",
+        "Data in motion"
+      ],
+      "rigtigt": 2,
+      "forklaring": "ROT: redundant, obsolete, trivial. Koster lagerplads og øger angrebsfladen uden at skabe værdi. Dark data er data, I har men ikke kender, og det kan gemme på guld. Veritas: 54 % dark, 32 % ROT, kun 14 % i brug."
+    },
+    {
+      "runde": 3,
+      "type": "mc",
+      "emoji": "🖥️",
+      "titel": "Den gamle GPU",
+      "tekst": "Du sælger din gamle GPU og mailer køberen originalbilledet, taget derhjemme med telefonen. Hvad kan filen afsløre, som ikke ses på billedet?",
+      "svar": [
+        "Ingenting, et JPG gemmer kun pixels",
+        "GPS-position, tidspunkt og telefonmodel",
+        "Telefonens gemte wi-fi-koder",
+        "Dit telefonnummer"
+      ],
+      "rigtigt": 1,
+      "forklaring": "Billedfiler er binære og bærer EXIF-metadata: tid, kamera og ofte GPS, altså din adresse. Mange sociale medier fjerner det ved upload. En originalfil på mail eller via delt link gør typisk ikke."
+    },
+    {
+      "runde": 4,
+      "type": "mc",
+      "emoji": "⛓️",
+      "titel": "Kæden",
+      "tekst": "Full backup mandag nat. Inkrementel backup tirsdag, onsdag og torsdag nat. Fredag morgen dør serveren. Hvad skal du bruge for at gendanne alt?",
+      "svar": [
+        "Kun mandagens full",
+        "Mandagens full + kun torsdagens backup",
+        "Kun torsdagens backup",
+        "Mandagens full + tirsdagens, onsdagens og torsdagens"
+      ],
+      "rigtigt": 3,
+      "forklaring": "Inkrementel gemmer ændringer siden *seneste backup*, så hele kæden skal med, og ét defekt led kan ødelægge resten. B havde været rigtigt med differentiel backup, der gemmer alt siden seneste *full*."
+    },
+    {
+      "runde": 4,
+      "type": "mc",
+      "emoji": "➕",
+      "titel": "Den ekstra 1'er",
+      "tekst": "Hvorfor kræver 3-2-1-1-0-reglen mindst én kopi, der er offline eller immutable?",
+      "svar": [
+        "Ransomware rammer alt, den kan nå over netværket",
+        "Offline-medier er billigere end skyen",
+        "GDPR kræver offline-opbevaring af persondata",
+        "Det gør gendannelse hurtigere"
+      ],
+      "rigtigt": 0,
+      "forklaring": "Kapitlet: angriberen kan kun kræve løsesum, hvis backuppen også er ramt. Hele reglen: 3 kopier, 2 medietyper, 1 off-site, 1 offline eller immutable, 0 fejl ved testet gendannelse."
+    },
+    {
+      "runde": 4,
+      "type": "mc",
+      "emoji": "0️⃣",
+      "titel": "0'et",
+      "tekst": "Hvad står 0'et i 3-2-1-1-0 for?",
+      "svar": [
+        "0 kopier i skyen",
+        "0 admins på backupsystemet",
+        "0 minutters nedetid",
+        "0 fejl ved verificeret gendannelse"
+      ],
+      "rigtigt": 3,
+      "forklaring": "En backup er intet værd, før den er gendannet. Checksums før og efter viser, at filerne er identiske bit for bit. Fokus på recovery, ikke backup."
+    },
+    {
+      "runde": 4,
+      "type": "mc",
+      "emoji": "🗑️",
+      "titel": "Retten til at blive glemt",
+      "tekst": "En kunde beder om at blive slettet. Kundens data ligger også i inkrementelle backups, som ikke kan redigeres. Hvad gør I?",
+      "svar": [
+        "Sletter hele backupkæden med det samme",
+        "Intet, backups er undtaget fra GDPR",
+        "Sletter live, lader backuppen udløbe og logger sletningen",
+        "Gendanner backup, sletter kunden, tager ny full"
+      ],
+      "rigtigt": 2,
+      "forklaring": "Tag data ud af brug, fortæl kunden at data ligger i backup til den overskrives efter fast plan, og før log over sletninger, så kunden slettes igen, hvis I nogensinde gendanner."
+    },
+    {
+      "runde": 4,
+      "type": "mc",
+      "emoji": "🏢",
+      "titel": "Hot site",
+      "tekst": "Alarmcentralen må ikke gå ned, heller ikke hvis datacentret brænder. Hvad vælger I?",
+      "svar": [
+        "Cold site",
+        "Hot site",
+        "RAID 1 på serveren",
+        "Natlig backup til skyen"
+      ],
+      "rigtigt": 1,
+      "forklaring": "Et hot site kører parallelt og overtager automatisk. Cold site er billigere, men giver nedetid. RAID beskytter mod en død disk, ikke mod en brand."
+    },
+    {
+      "runde": 4,
+      "type": "mc",
+      "emoji": "📄",
+      "titel": "Papir",
+      "tekst": "Mærsks tidligere CIO anbefaler efter NotPetya, at beredskabsplan, roller og telefonlister findes udprintet. Hvorfor?",
+      "svar": [
+        "Revisor kræver papir",
+        "Angrebet kan tage netop de systemer ned, planen ligger på",
+        "Papir er mere fortroligt end digitale filer",
+        "ISO 27001 forbyder digitale beredskabsplaner"
+      ],
+      "rigtigt": 1,
+      "forklaring": "Når alt er krypteret, er planen på SharePoint også. Fra samme liste: et kendt war room, en telefonbro, og under angrebet kun én krisekommandør. \"Det er ikke et demokrati.\""
+    },
+    {
+      "runde": 5,
+      "type": "estimat",
+      "emoji": "🦠",
+      "titel": "NotPetya",
+      "tekst": "Juni 2017. Hvor mange pc'er måtte Mærsk geninstallere efter NotPetya?",
+      "rigtigt": 45000,
+      "min": 0,
+      "max": 100000,
+      "trin": 1000,
+      "start": 50000,
+      "enhed": "pc'er",
+      "forklaring": "45.000 pc'er og 4.000 servere, og prisen var op mod 2 mia. kr. NotPetya lignede ransomware, men var reelt en wiper. Ifølge Wired reddede én domain controller i Ghana dem. Den var offline pga. strømsvigt."
+    }
+  ]
+}
