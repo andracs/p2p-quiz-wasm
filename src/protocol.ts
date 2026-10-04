@@ -109,18 +109,27 @@ export async function encodeCode(code: BootstrapCode): Promise<string> {
   return CODE_PREFIX + toBase64Url(await pipe(json, new CompressionStream("deflate-raw")));
 }
 
-export async function decodeCode(text: string, expected: BootstrapCode["type"]): Promise<BootstrapCode> {
-  const clean = text.replace(/\s+/g, "");
-  if (!clean.startsWith(CODE_PREFIX)) throw new Error(`Codes start with "${CODE_PREFIX}".`);
+/** A link to this page that carries a code after the "#". That part never leaves the browser. */
+export function codeLink(code: string): string {
+  return `${location.origin}${location.pathname}#${code}`;
+}
+
+/** Accepts a bare code or any text that contains one, such as a link. */
+export async function decodeCode(text: string, expected?: BootstrapCode["type"]): Promise<BootstrapCode> {
+  const data = new RegExp(`${CODE_PREFIX}([A-Za-z0-9_-]+)`).exec(text.replace(/\s+/g, ""))?.[1];
+  if (!data) throw new Error(`Paste a link or a code (it contains "${CODE_PREFIX}").`);
   let code: BootstrapCode;
   try {
-    const json = await pipe(fromBase64Url(clean.slice(CODE_PREFIX.length)), new DecompressionStream("deflate-raw"));
+    const json = await pipe(fromBase64Url(data), new DecompressionStream("deflate-raw"));
     code = JSON.parse(new TextDecoder().decode(json));
   } catch {
-    throw new Error("This code is damaged or incomplete. Copy it again.");
+    throw new Error("This link or code is damaged or incomplete. Copy it again.");
   }
-  if (code.version !== 1 || code.type !== expected) {
-    throw new Error(expected === "offer" ? "That is not an invite code." : "That is not a response code.");
+  if (code.version !== 1 || (code.type !== "offer" && code.type !== "answer")) {
+    throw new Error("This is not a P2P Quiz Wasm link.");
+  }
+  if (expected && code.type !== expected) {
+    throw new Error(expected === "offer" ? "That is a response, not an invite." : "That is an invite, not a response.");
   }
   return code;
 }

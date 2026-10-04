@@ -1,6 +1,7 @@
 // Plain DOM rendering. Usernames are arbitrary strings typed by other people,
 // so text only ever reaches the page through textContent, never innerHTML.
 
+import { encode } from "uqr";
 import type { PeerStatus } from "./peer";
 import type { PeerInfo, QuizEvent } from "./protocol";
 import type { Session } from "./storage";
@@ -22,23 +23,39 @@ export interface View {
   session: Session;
   state: QuizState;
   peers: PeerStatus[];
+  /** Invites of this tab that are still waiting for their response. */
+  openInvites: string[];
   relayedSignals: number;
   events: QuizEvent[];
 }
 
-/** A response code waiting to be pasted by the node that sent the invite. */
+/** A response link waiting to be opened by the node that sent the invite. */
 export interface PendingResponse {
-  code: string;
+  link: string;
   inviter: PeerInfo;
+}
+
+/** The invite link this tab was opened with. */
+export interface Invitation {
+  code: string;
+  inviter: string;
+  quizId: string;
+}
+
+/** This tab was opened from a response link and hands it over to the quiz tab. */
+export interface Handoff {
+  state: "sending" | "delivered" | "failed";
+  link: string;
+  problem?: string | null;
 }
 
 export interface Actions {
   view(): View | null;
   createQuiz(username: string): void;
-  joinQuiz(username: string, inviteCode: string): Promise<PendingResponse>;
-  rejoinQuiz(inviteCode: string): Promise<PendingResponse>;
-  invite(): Promise<string>;
-  connect(responseCode: string): Promise<void>;
+  joinQuiz(username: string, invitation: string): Promise<PendingResponse>;
+  rejoinQuiz(invitation: string): Promise<PendingResponse>;
+  invite(): Promise<{ inviteId: string; link: string }>;
+  connect(response: string): Promise<void>;
   start(): void;
   answer(key: string): void;
   showScoreboard(): void;
@@ -47,21 +64,25 @@ export interface Actions {
 let actions: Actions | null = null;
 
 // Local UI state. It is not part of the quiz and is never replicated.
+let invitation: Invitation | null = null;
 let pendingResponse: PendingResponse | null = null;
-let inviteCode: string | null = null;
+let invite: { inviteId: string; link: string } | null = null;
+let handoff: Handoff | null = null;
 const expandedRows = new Set<string>();
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const field = (id: string) => $<HTMLInputElement | HTMLTextAreaElement>(id);
 
-export function bindUi(a: Actions): void {
+export function bindUi(a: Actions, rememberedUsername: string): void {
   actions = a;
-  const creatingResponse = "CREATING RESPONSE CODE…";
+  field("username").value = rememberedUsername;
+  const creatingResponse = "CREATING RESPONSE…";
   onClick("create", () => a.createQuiz(username()));
   onClick(
     "join",
     async () => {
-      pendingResponse = await a.joinQuiz(username(), field("invite-code").value);
+      pendingResponse = await a.joinQuiz(username(), invitation?.code ?? field("invite-code").value);
+      invitation = null;
     },
     creatingResponse,
   );
@@ -76,35 +97,72 @@ export function bindUi(a: Actions): void {
   onClick(
     "invite",
     async () => {
-      inviteCode = await a.invite();
+      invite = await a.invite();
       field("response-input").value = "";
     },
-    "CREATING INVITE CODE…",
+    "CREATING INVITE…",
   );
   onClick("connect", async () => {
     await a.connect(field("response-input").value);
-    inviteCode = null;
+    field("response-input").value = "";
   });
   onClick("start-question", () => a.start());
   onClick("show-scoreboard", () => a.showScoreboard());
-  onClick("copy-invite", () => copy("invite-output", "copy-invite"));
-  onClick("copy-response", () => copy("response-output", "copy-response"));
+  for (const kind of ["invite", "response", "handoff"]) {
+    onClick(`copy-${kind}`, () => copy(`${kind}-link`, `copy-${kind}`));
+    onClick(`share-${kind}`, () => share(field(`${kind}-link`).value));
+    $(`share-${kind}`).hidden = typeof navigator.share !== "function";
+  }
+}
+
+/** This tab was opened with an invite link: joining only needs a name and one click. */
+export function showInvitation(next: Invitation): void {
+  invitation = next;
+}
+
+/** A reloaded node was given a new invite link to link up again. */
+export function prefillRejoin(code: string): void {
+  field("rejoin-code").value = code;
+}
+
+export function showHandoff(next: Handoff): void {
+  handoff = next;
+  renderUi();
 }
 
 export function renderUi(): void {
   const view = actions?.view() ?? null;
-  // A response code disappears as soon as the inviting node has used it.
+  // A response disappears as soon as the inviting node has used it, an invite once it is answered.
   const inviter = pendingResponse?.inviter.nodeId;
   if (view?.peers.some((p) => p.nodeId === inviter && p.state === "OPEN")) pendingResponse = null;
+  if (invite && !view?.openInvites.includes(invite.inviteId)) invite = null;
 
-  const screen = !view ? "start" : view.state.createdAt ? "quiz" : "joining";
+  const screen = handoff ? "handoff" : !view ? "start" : view.state.createdAt ? "quiz" : "joining";
   $("start").hidden = screen !== "start";
+  $("handoff").hidden = screen !== "handoff";
   $("quiz").hidden = screen !== "quiz";
   $("syncing").hidden = screen !== "joining" || pendingResponse !== null;
   $("response").hidden = pendingResponse === null;
+
+  $("invited").hidden = invitation === null;
+  $("create-section").hidden = invitation !== null;
+  if (invitation) {
+    const quiz = el("code", invitation.quizId.slice(0, 12));
+    const by = el("strong", invitation.inviter);
+    $("invited").replaceChildren("Invited by ", by, " to quiz ", quiz, ". Enter your name and press JOIN QUIZ.");
+  }
   if (pendingResponse) {
-    setValue("response-output", pendingResponse.code);
+    showLink("response", pendingResponse.link);
     $("response-to").textContent = pendingResponse.inviter.username;
+  }
+  if (handoff) {
+    showLink("handoff", handoff.link);
+    $("handoff-status").textContent = {
+      sending: "Handing the response over to your quiz tab…",
+      delivered: "Done: your quiz tab is connecting now. You can close this tab.",
+      failed: `${handoff.problem} Open the link in the browser where your quiz is running, or copy it and paste it under “Response” in your quiz tab.`,
+    }[handoff.state];
+    $("handoff-copy").hidden = handoff.state !== "failed";
   }
   if (view && screen === "quiz") renderQuiz(view);
   renderDebug(view);
@@ -166,8 +224,8 @@ function renderQuiz({ session, state, peers }: View): void {
     participants.map(({ name, status }) => el("li", el("span", name), el("span", status))),
   );
 
-  $("invite-panel").hidden = inviteCode === null;
-  setValue("invite-output", inviteCode ?? "");
+  $("invite-panel").hidden = invite === null;
+  if (invite) showLink("invite", invite.link);
   // No open link, but other participants exist: typically right after a reload.
   const linked = peers.some((p) => p.state === "OPEN");
   $("rejoin-panel").hidden = linked || state.participants.length < 2 || pendingResponse !== null;
@@ -200,6 +258,60 @@ function renderDebug(view: View | null): void {
     "Event log (lamport, username, type):",
     ...events.map((e) => `  ${e.lamport}  ${e.username}  ${e.type}`),
   ].join("\n");
+}
+
+// --- Links and QR codes ----------------------------------------------------
+
+/** Show a link as text and as a QR code (in the elements "<prefix>-link" and "<prefix>-qr"). */
+function showLink(prefix: string, link: string): void {
+  setValue(`${prefix}-link`, link);
+  update(`${prefix}-qr`, link, () => [qrCode(link)]);
+}
+
+/** A QR code as SVG, one path with a rectangle per run of dark modules. */
+function qrCode(text: string): SVGSVGElement {
+  const { data, size } = encode(text, { ecc: "L", border: 4 });
+  let path = "";
+  data.forEach((row, y) => {
+    for (let x = 0; x < size; x++) {
+      if (!row[x]) continue;
+      const start = x;
+      while (row[x + 1]) x++;
+      path += `M${start} ${y}h${x - start + 1}v1H${start}z`;
+    }
+  });
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  svg.setAttribute("shape-rendering", "crispEdges");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "QR code of the link");
+  const modules = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  modules.setAttribute("d", path);
+  svg.append(modules);
+  return svg;
+}
+
+async function copy(fieldId: string, buttonId: string): Promise<void> {
+  const text = field(fieldId);
+  text.select();
+  try {
+    await navigator.clipboard.writeText(text.value);
+  } catch {
+    throw new Error("Could not copy automatically. The link is selected: press Ctrl+C (or ⌘+C).");
+  }
+  const button = $(buttonId);
+  const label = button.textContent;
+  button.textContent = "COPIED";
+  setTimeout(() => (button.textContent = label), 1500);
+}
+
+/** The phone's or computer's own share sheet, e.g. straight into the class chat. */
+async function share(url: string): Promise<void> {
+  try {
+    await navigator.share({ title: "P2P Quiz Wasm", url });
+  } catch (error) {
+    if ((error as Error).name !== "AbortError") throw error; // closing the share sheet is fine
+  }
 }
 
 // --- Helpers ---------------------------------------------------------------
@@ -243,7 +355,8 @@ function onClick(id: string, handler: () => unknown, busyLabel?: string): void {
   });
 }
 
-async function attempt(handler: () => unknown): Promise<void> {
+/** Run an action, show its error (if any) and re-render. */
+export async function attempt(handler: () => unknown): Promise<void> {
   showError("");
   try {
     await handler();
@@ -256,17 +369,4 @@ async function attempt(handler: () => unknown): Promise<void> {
 function showError(message: string): void {
   $("error").textContent = message;
   $("error").hidden = !message;
-}
-
-async function copy(fieldId: string, buttonId: string): Promise<void> {
-  const text = field(fieldId);
-  text.select();
-  try {
-    await navigator.clipboard.writeText(text.value);
-  } catch {
-    throw new Error("Could not copy automatically. The code is selected: press Ctrl+C (or ⌘+C).");
-  }
-  const button = $(buttonId);
-  button.textContent = "COPIED";
-  setTimeout(() => (button.textContent = "COPY"), 1500);
 }

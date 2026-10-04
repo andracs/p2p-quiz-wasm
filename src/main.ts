@@ -4,9 +4,27 @@
 
 import init, { QuizEngine } from "../wasm/pkg/p2p_quiz_wasm.js";
 import { PeerNetwork } from "./peer";
-import { createMessage, decodeCode, type EventLogPayload, type Message, type QuizEvent } from "./protocol";
-import { clearSession, loadEvents, loadSession, saveEvents, saveSession, type Session } from "./storage";
-import { bindUi, renderUi, type PendingResponse, type QuizState } from "./ui";
+import { codeLink, createMessage, decodeCode, type EventLogPayload, type Message, type QuizEvent } from "./protocol";
+import {
+  clearSession,
+  loadEvents,
+  loadSession,
+  loadUsername,
+  saveEvents,
+  saveSession,
+  saveUsername,
+  type Session,
+} from "./storage";
+import {
+  attempt,
+  bindUi,
+  prefillRejoin,
+  renderUi,
+  showHandoff,
+  showInvitation,
+  type PendingResponse,
+  type QuizState,
+} from "./ui";
 
 /** This browser tab's node in one quiz. */
 class QuizNode {
@@ -94,6 +112,7 @@ function current(): QuizNode {
 function activate(next: QuizNode): void {
   node = next;
   saveSession(next.session);
+  saveUsername(next.session.username);
   next.persist();
 }
 
@@ -106,8 +125,8 @@ function createQuiz(username: string): void {
   current().act("PEER_JOINED"); // the creator joins exactly like everybody else
 }
 
-async function joinQuiz(username: string, inviteCode: string): Promise<PendingResponse> {
-  const invite = await decodeCode(inviteCode, "offer");
+async function joinQuiz(username: string, invitation: string): Promise<PendingResponse> {
+  const invite = await decodeCode(invitation, "offer");
   const nodeId = crypto.randomUUID();
   const engine = new QuizEngine(nodeId, username);
   engine.join(invite.quizId);
@@ -117,15 +136,15 @@ async function joinQuiz(username: string, inviteCode: string): Promise<PendingRe
     throw error;
   });
   activate(joining);
-  return { code, inviter: { nodeId: invite.nodeId, username: invite.username } };
+  return { link: codeLink(code), inviter: { nodeId: invite.nodeId, username: invite.username } };
 }
 
 /** After a reload: link up again with an invite from any connected peer. */
-async function rejoinQuiz(inviteCode: string): Promise<PendingResponse> {
-  const invite = await decodeCode(inviteCode, "offer");
+async function rejoinQuiz(invitation: string): Promise<PendingResponse> {
+  const invite = await decodeCode(invitation, "offer");
   if (invite.quizId !== current().session.quizId) throw new Error("That invite belongs to another quiz.");
   const code = await current().network.acceptInvite(invite);
-  return { code, inviter: { nodeId: invite.nodeId, username: invite.username } };
+  return { link: codeLink(code), inviter: { nodeId: invite.nodeId, username: invite.username } };
 }
 
 /** A reload keeps this tab's identity and rebuilds the state from the stored event log. */
@@ -137,30 +156,114 @@ function restore(session: Session): void {
   else clearSession(); // the join never completed: start over
 }
 
+// --- Links ------------------------------------------------------------------------
+// An invite or response can travel as a link: the code sits after the "#", which the
+// browser never sends to the web server. Opening a response link starts a new tab, so
+// that tab hands the code over to the quiz tab that made the invite. Tabs of the same
+// browser can talk over a BroadcastChannel: still no server involved.
+
+const tabs = new BroadcastChannel("p2pquiz");
+
+/** Takes a code out of the address bar, so that a reload does not use it again. */
+function takeLinkedCode(): string | null {
+  if (!location.hash.includes("p2pq1:")) return null;
+  const text = decodeURIComponent(location.hash.slice(1));
+  history.replaceState(null, "", location.pathname + location.search);
+  return text;
+}
+
+async function openLink(text: string): Promise<void> {
+  const code = await decodeCode(text);
+  if (code.type === "offer") {
+    if (!node) return showInvitation({ code: text, inviter: code.username, quizId: code.quizId });
+    if (node.session.quizId === code.quizId) return prefillRejoin(text);
+    throw new Error("This tab is already in another quiz. Open the invite link in a new tab.");
+  }
+  // A response: for an invite made in this very tab, or in another tab of this browser?
+  if (node?.network.openInvites().includes(code.inviteId)) return node.network.acceptResponse(code);
+  if (node) {
+    const problem = await handOver(text, code.inviteId);
+    if (problem) throw new Error(problem);
+    return;
+  }
+  const link = codeLink(text);
+  showHandoff({ state: "sending", link });
+  const problem = await handOver(text, code.inviteId);
+  showHandoff({ state: problem === null ? "delivered" : "failed", link, problem });
+}
+
+/** Offers a response to the other tabs. Resolves with null once the right tab took it. */
+function handOver(code: string, inviteId: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const finish = (problem: string | null) => {
+      clearTimeout(timer);
+      tabs.removeEventListener("message", onReply);
+      resolve(problem);
+    };
+    const onReply = ({ data }: MessageEvent) => {
+      if (data?.inviteId === inviteId) finish(data.kind === "accepted" ? null : String(data.problem));
+    };
+    const timer = setTimeout(() => finish("No quiz tab in this browser is waiting for this response."), 3000);
+    tabs.addEventListener("message", onReply);
+    tabs.postMessage({ kind: "response", code });
+  });
+}
+
+/** In the quiz tab: take a response that a link opened in another tab handed over. */
+tabs.addEventListener("message", async ({ data }: MessageEvent) => {
+  if (data?.kind !== "response" || !node) return;
+  const response = await decodeCode(data.code, "answer").catch(() => null);
+  if (!response || !node.network.openInvites().includes(response.inviteId)) return; // another tab's invite
+  try {
+    await node.network.acceptResponse(response);
+    tabs.postMessage({ kind: "accepted", inviteId: response.inviteId });
+  } catch (error) {
+    const problem = error instanceof Error ? error.message : String(error);
+    tabs.postMessage({ kind: "rejected", inviteId: response.inviteId, problem });
+  }
+  renderUi();
+});
+
 async function main(): Promise<void> {
   await init();
-  const saved = loadSession();
+  const linked = takeLinkedCode();
+  const response = linked !== null && (await decodeCode(linked).catch(() => null))?.type === "answer";
+  // A tab opened from a response link only delivers it; it does not resume a quiz itself.
+  const saved = response ? null : loadSession();
   if (saved) restore(saved);
-  bindUi({
-    view: () =>
-      node && {
-        session: node.session,
-        state: node.state(),
-        peers: node.network.peerStatuses(),
-        relayedSignals: node.network.relayedSignals,
-        events: node.events(),
+  bindUi(
+    {
+      view: () =>
+        node && {
+          session: node.session,
+          state: node.state(),
+          peers: node.network.peerStatuses(),
+          openInvites: node.network.openInvites(),
+          relayedSignals: node.network.relayedSignals,
+          events: node.events(),
+        },
+      createQuiz,
+      joinQuiz,
+      rejoinQuiz,
+      invite: async () => {
+        const { inviteId, code } = await current().network.createInvite();
+        return { inviteId, link: codeLink(code) };
       },
-    createQuiz,
-    joinQuiz,
-    rejoinQuiz,
-    invite: () => current().network.createInvite(),
-    connect: async (code) => current().network.acceptResponse(await decodeCode(code, "answer")),
-    start: () => current().act("QUIZ_STARTED"),
-    answer: (key) => current().act("ANSWER_SUBMITTED", { questionId: current().state().question.id, answer: key }),
-    showScoreboard: () => current().act("SHOW_SCOREBOARD"),
-  });
+      connect: async (text) => current().network.acceptResponse(await decodeCode(text, "answer")),
+      start: () => current().act("QUIZ_STARTED"),
+      answer: (key) => current().act("ANSWER_SUBMITTED", { questionId: current().state().question.id, answer: key }),
+      showScoreboard: () => current().act("SHOW_SCOREBOARD"),
+    },
+    loadUsername(),
+  );
   window.addEventListener("pagehide", () => node?.network.close());
+  // A link pasted into the address bar of an open quiz tab only changes the "#" part.
+  window.addEventListener("hashchange", () => {
+    const text = takeLinkedCode();
+    if (text) void attempt(() => openLink(text));
+  });
   renderUi();
+  if (linked) await attempt(() => openLink(linked));
 }
 
 main().catch((error) => {

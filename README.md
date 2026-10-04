@@ -26,35 +26,54 @@ itself. The node that created the quiz has no special role: it can leave, and th
 | ----------------- | --------------------------------------------------------------------------------------------- |
 | `wasm/src/lib.rs` | `QuizEngine`: the event log, Lamport clock, validation and derived quiz state. No networking. |
 | `src/peer.ts`     | WebRTC: manual bootstrap, relayed signaling, full mesh, deduplication. No quiz logic.         |
-| `src/protocol.ts` | DataChannel message format; invite and response codes.                                        |
-| `src/main.ts`     | Connects engine, network, storage and UI.                                                     |
-| `src/ui.ts`       | Plain DOM rendering.                                                                          |
+| `src/protocol.ts` | DataChannel message format; invite and response codes and links.                              |
+| `src/main.ts`     | Connects engine, network, storage and UI; opens links and hands responses between tabs.       |
+| `src/ui.ts`       | Plain DOM rendering, including the QR codes.                                                  |
 | `src/storage.ts`  | The event log in `localStorage` under `p2pquiz:<quizId>`.                                     |
 
 Each tab is one node with a random `nodeId` (`crypto.randomUUID()`). The username is only a display name. The quiz
 ID is `SHA256(window.location.hostname + "|" + username + "|" + ISO-8601 UTC timestamp)`; the page shows the first
 12 hex characters.
 
-## The first link: invite code and response code
+## The first link: an invite link and a response link
 
 Two WebRTC peers must exchange an _offer_ and an _answer_ before they can connect. These contain each side's network
-addresses (ICE candidates) and encryption fingerprint. Normally a signaling server carries them. Here a human does:
+addresses (ICE candidates) and encryption fingerprint. Normally a signaling server carries them. Here people do, as
+two links:
 
 1. **x** clicks _INVITE ANOTHER PEER_. Its browser creates an `RTCPeerConnection` with a DataChannel named
-   `p2p-quiz`, creates the offer, waits until ICE gathering is complete (so all addresses are inside) and shows it as
-   an invite code: `p2pq1:` + base64url(deflate(`{ version, type: "offer", quizId, nodeId, username, sdp, inviteId }`)).
-2. **y** pastes it and clicks _JOIN QUIZ_. Its browser applies the offer, creates the answer, waits for ICE gathering
-   and shows a response code in the same format (`type: "answer"`).
-3. **x** pastes the response code and clicks _CONNECT_ (`setRemoteDescription`). The DataChannel opens.
+   `p2p-quiz`, creates the offer, waits until ICE gathering is complete (so all addresses are inside) and shows an
+   **invite link** with a QR code: `https://…/p2p-quiz-wasm/#p2pq1:…`, where `p2pq1:` +
+   base64url(deflate(`{ version, type: "offer", quizId, nodeId, username, sdp, inviteId }`)) is the code.
+2. **y** opens the link (clicks it, or scans the QR code), types a name and clicks _JOIN QUIZ_. Its browser applies the
+   offer, creates the answer and shows a **response link** in the same format (`type: "answer"`).
+3. **y** sends the response link back, for example in the class chat. **x** opens it: it opens in a new tab, which
+   hands it to x's quiz tab, and that tab connects (`setRemoteDescription`). The DataChannel opens.
 
-Two codes are needed because WebRTC needs a round trip: each side must learn the other side's addresses and
-fingerprint, and the offer cannot contain an answer that does not exist yet. Without a server, copy and paste (chat,
-e-mail, a shared screen) is the signaling channel. This is only needed once per new node.
+Each invite link works for one person: press _INVITE ANOTHER PEER_ again for the next one. Pasting a link or a bare
+`p2pq1:` code into the text fields works too. A response may be opened minutes after it was made.
+
+Two links are needed because WebRTC needs a round trip: each side must learn the other side's addresses and
+fingerprint, and the offer cannot contain an answer that does not exist yet. This is only needed once per new node.
+
+### Which channel carries this without a server?
+
+Only people. A browser cannot listen for incoming connections or find other browsers on a network, so the first
+offer and answer must be carried by something outside the app: a link in a chat, a QR code on a screen, copy and
+paste. Everything else in this design stays server-free:
+
+- The code sits after the `#` of the link. Browsers never send that part to the web server, so GitHub Pages only
+  serves the static files and never sees an invite.
+- A response link opens in a new tab, which is not the tab holding the invite. The two tabs talk over a
+  `BroadcastChannel`, which connects tabs of the same browser on the same device. The quiz tab that made the
+  invite takes the response and answers "accepted".
+- One-click joining without the return trip would need an automatic channel, that is a server or public relay that
+  both browsers can reach (a signaling server, MQTT or Nostr relays, BitTorrent trackers). This proof-of-concept
+  deliberately uses none.
 
 ## Every later link: signaling through existing links
 
-Once a node is linked to one node of the quiz, it never needs copy and paste again. If x–y are linked and z joins
-through y:
+Once a node is linked to one node of the quiz, it never needs links again. If x–y are linked and z joins through y:
 
 ```
  x ────── y ────── z     1. y sends PEER_LIST to x and z: "I am linked to x and z"
@@ -101,7 +120,7 @@ Event types: `QUIZ_CREATED`, `PEER_JOINED`, `QUIZ_STARTED`, `ANSWER_SUBMITTED`, 
   node gets the complete log from its bootstrap peer, rebuilds the state and then announces itself with
   `PEER_JOINED`.
 - **Persistence**: the log is stored in `localStorage` (`p2pquiz:<quizId>`). After a reload the state comes back
-  from it. The WebRTC links do not: a connected peer creates a new invite code, and the reloaded node pastes it.
+  from it. The WebRTC links do not: a connected peer creates a new invite link, and the reloaded node opens it.
 
 DataChannel messages are JSON:
 `{ protocol: "p2pquiz", version: 1, type, sender, messageId, payload }` with `type` one of `HELLO`, `EVENT`,
@@ -146,14 +165,17 @@ The page needs a secure context (`https://` or `localhost`), because it uses `cr
 
 ### Demo: the creator leaves
 
-1. Window 1: username `x`, _CREATE QUIZ_, _INVITE ANOTHER PEER_, _COPY_.
-2. Window 2: username `y`, paste the invite code, _JOIN QUIZ_, _COPY_ the response code.
-3. Window 1: paste the response code, _CONNECT_.
-4. Window 2 invites window 3 (username `z`) the same way.
+1. Window 1: username `x`, _CREATE QUIZ_, _INVITE ANOTHER PEER_, _COPY LINK_.
+2. Window 2: open the invite link, username `y`, _JOIN QUIZ_, _COPY LINK_ (the response link).
+3. Window 1's browser: open the response link. That tab says "Done" and can be closed; x and y are connected.
+4. y invites z the same way (window 3).
 5. A moment later x and z are linked through y automatically: _Debug_ shows 2 open DataChannels on every node.
 6. Any node presses _START QUESTION_; all three answer.
 7. Close window 1 (x) completely.
 8. y or z presses _SHOW SCOREBOARD_. Both show the same scoreboard, including x's answer.
+
+With phones: show the invite QR code on a screen, scan it with the phone camera, press _JOIN QUIZ_, and send the
+response link back with _SHARE_.
 
 ## Build
 
@@ -177,6 +199,7 @@ All URLs in `dist/` are relative, so the folder works from any path on any stati
 - Some NAT/firewall combinations cannot establish direct WebRTC connections without TURN. TURN is intentionally not
   implemented in this proof-of-concept. Windows on one machine and machines on one network normally work. A public
   STUN server (`stun.l.google.com:19302`) helps across simple NATs, but it is not required.
-- No reconnection logic: after a reload, links are made again by hand with a new invite code.
+- No reconnection logic: after a reload, links are made again by hand with a new invite link.
+- A response link must be opened in the same browser as the quiz tab that made the invite (or pasted into it).
 - No authentication: every node is trusted. This is a classroom demo.
 - Exactly one hard-coded question.

@@ -62,8 +62,8 @@ export class PeerNetwork {
 
   // --- Manual bootstrap: invite code, then response code ----------------------
 
-  /** Any node in the quiz: create an offer and wrap it in an invite code. */
-  async createInvite(): Promise<string> {
+  /** Any node in the quiz: create an offer and wrap it in an invite code. Each invite is for one node. */
+  async createInvite(): Promise<{ inviteId: string; code: string }> {
     const pc = new RTCPeerConnection(RTC_CONFIG);
     const channel = pc.createDataChannel(CHANNEL_LABEL);
     await pc.setLocalDescription(await pc.createOffer());
@@ -71,7 +71,15 @@ export class PeerNetwork {
     const inviteId = crypto.randomUUID();
     this.invites.set(inviteId, { pc, channel });
     const sdp = pc.localDescription!.sdp;
-    return encodeCode({ version: 1, type: "offer", inviteId, quizId: this.quizId, ...this.self, sdp });
+    return {
+      inviteId,
+      code: await encodeCode({ version: 1, type: "offer", inviteId, quizId: this.quizId, ...this.self, sdp }),
+    };
+  }
+
+  /** Invites of this node that are still waiting for their response. */
+  openInvites(): string[] {
+    return [...this.invites.keys()];
   }
 
   /** New node: accept an invite code and create the response code. */
@@ -94,8 +102,8 @@ export class PeerNetwork {
   /** Inviting node: apply the response code. The DataChannel opens shortly after. */
   async acceptResponse(response: BootstrapCode): Promise<void> {
     const invite = this.invites.get(response.inviteId);
-    if (!invite) throw new Error("This response code does not belong to an invite from this node.");
-    if (response.quizId !== this.quizId) throw new Error("This response code belongs to another quiz.");
+    if (!invite) throw new Error("No open invite in this tab matches this response. Each invite works once.");
+    if (response.quizId !== this.quizId) throw new Error("This response belongs to another quiz.");
     this.invites.delete(response.inviteId);
     const peer = this.addPeer({ nodeId: response.nodeId, username: response.username }, invite.pc);
     this.attachChannel(peer, invite.channel);
@@ -269,10 +277,9 @@ export class PeerNetwork {
     const peer: Peer = { info, pc, channel: null };
     this.peers.set(info.nodeId, peer);
     pc.ondatachannel = (event) => this.attachChannel(peer, event.channel);
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed") pc.close();
-      this.handlers.onChange();
-    };
+    // Never close on "failed": Chrome reports it for a moment when a response is applied long
+    // after it was made (e.g. sent back through a chat), and then recovers on its own.
+    pc.onconnectionstatechange = () => this.handlers.onChange();
     if (trickleIce) {
       pc.onicecandidate = (event) => {
         if (event.candidate) this.sendSignal(info.nodeId, { type: "ice", candidate: event.candidate.toJSON() });

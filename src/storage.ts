@@ -2,6 +2,7 @@
 // - The replicated event log lives in localStorage under "p2pquiz:<quizId>".
 // - This tab's identity lives in sessionStorage, so a reload resumes as the
 //   same node, while other tabs of the same browser stay separate nodes.
+// - The last username used lives in localStorage under "p2pquiz:username".
 
 import type { QuizEvent } from "./protocol";
 
@@ -12,6 +13,7 @@ export interface Session {
 }
 
 const SESSION_KEY = "p2pquiz:session";
+const USERNAME_KEY = "p2pquiz:username";
 const logKey = (quizId: string) => `p2pquiz:${quizId}`;
 
 export function saveEvents(quizId: string, events: QuizEvent[]): void {
@@ -35,6 +37,15 @@ export function loadSession(): Session | null {
 
 export function clearSession(): void {
   sessionStorage.removeItem(SESSION_KEY);
+}
+
+/** The last username used in this browser, so that opening an invite link is nearly enough to join. */
+export function saveUsername(username: string): void {
+  write(localStorage, USERNAME_KEY, username);
+}
+
+export function loadUsername(): string {
+  return read<string>(localStorage, USERNAME_KEY) ?? "";
 }
 
 function read<T>(storage: Storage, key: string): T | null {

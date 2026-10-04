@@ -131,6 +131,23 @@
         overflow-x: auto;
         font-size: 13px;
       }
+      .link {
+        font:
+          13px ui-monospace,
+          Menlo,
+          Consolas,
+          monospace;
+      }
+      /* Black on white in both colour schemes: phone cameras need the contrast. */
+      .qr svg {
+        display: block;
+        width: min(100%, 360px);
+        margin: 16px auto;
+        background: #fff;
+      }
+      .qr path {
+        fill: #000;
+      }
     </style>
   </head>
   <body>
@@ -140,23 +157,41 @@
 
       <!-- Hidden until the WASM engine has loaded, so no click is lost. -->
       <section id="start" hidden>
+        <p id="invited" hidden></p>
         <label for="username">Username:</label>
         <input id="username" type="text" autocomplete="off" spellcheck="false" />
-        <button id="create">CREATE QUIZ</button>
-        <p class="or">or</p>
-        <label for="invite-code">Invite code:</label>
-        <textarea id="invite-code" rows="3" spellcheck="false" placeholder="p2pq1:…"></textarea>
+        <div id="create-section">
+          <button id="create">CREATE QUIZ</button>
+          <p class="or">or</p>
+          <label for="invite-code">Invite link or code:</label>
+          <textarea id="invite-code" rows="3" spellcheck="false" placeholder="https://…#p2pq1:…"></textarea>
+        </div>
         <button id="join">JOIN QUIZ</button>
       </section>
 
+      <!-- Shown to a joining node: the response goes back to the inviter as a link. -->
       <section id="response" hidden>
-        <label for="response-output">Response code:</label>
-        <textarea id="response-output" rows="5" readonly></textarea>
-        <button id="copy-response">COPY</button>
-        <p class="muted">
-          Give this code to <strong id="response-to"></strong>, who pastes it under “Response code”. Waiting for the
-          connection…
+        <p>
+          Send this response link back to <strong id="response-to"></strong>, for example in a chat, or let them scan
+          it. When they open it, you are connected.
         </p>
+        <div id="response-qr" class="qr"></div>
+        <label for="response-link">Response link:</label>
+        <input id="response-link" class="link" type="text" readonly />
+        <button id="copy-response">COPY LINK</button>
+        <button id="share-response" hidden>SHARE</button>
+      </section>
+
+      <!-- A tab opened from a response link only hands it over to the quiz tab. -->
+      <section id="handoff" hidden>
+        <p id="handoff-status"></p>
+        <div id="handoff-copy" hidden>
+          <div id="handoff-qr" class="qr"></div>
+          <label for="handoff-link">Response link:</label>
+          <input id="handoff-link" class="link" type="text" readonly />
+          <button id="copy-handoff">COPY LINK</button>
+          <button id="share-handoff" hidden>SHARE</button>
+        </div>
       </section>
 
       <section id="syncing" hidden>
@@ -184,17 +219,23 @@
 
         <button id="invite">INVITE ANOTHER PEER</button>
         <div id="invite-panel" hidden>
-          <label for="invite-output">Invite code (give it to the new peer):</label>
-          <textarea id="invite-output" rows="5" readonly></textarea>
-          <button id="copy-invite">COPY</button>
-          <label for="response-input">Response code (paste the new peer's response):</label>
-          <textarea id="response-input" rows="3" spellcheck="false" placeholder="p2pq1:…"></textarea>
+          <p>Invite link for one new peer. They open it, or scan the code, and press JOIN QUIZ.</p>
+          <div id="invite-qr" class="qr"></div>
+          <label for="invite-link">Invite link:</label>
+          <input id="invite-link" class="link" type="text" readonly />
+          <button id="copy-invite">COPY LINK</button>
+          <button id="share-invite" hidden>SHARE</button>
+          <p class="muted">
+            When their response link comes back, open it in this browser and they are connected. Or paste it here:
+          </p>
+          <label for="response-input">Response link or code:</label>
+          <textarea id="response-input" rows="3" spellcheck="false" placeholder="https://…#p2pq1:…"></textarea>
           <button id="connect">CONNECT</button>
         </div>
 
         <div id="rejoin-panel" hidden>
-          <label for="rejoin-code">Not connected to any peer. Paste an invite code from a connected peer:</label>
-          <textarea id="rejoin-code" rows="3" spellcheck="false" placeholder="p2pq1:…"></textarea>
+          <label for="rejoin-code">Not connected to any peer. Paste an invite link from a connected peer:</label>
+          <textarea id="rejoin-code" rows="3" spellcheck="false" placeholder="https://…#p2pq1:…"></textarea>
           <button id="rejoin">JOIN QUIZ</button>
         </div>
 
