@@ -49,6 +49,7 @@ export interface NetworkHandlers {
 export class PeerNetwork {
   /** Signaling messages this node forwarded on behalf of other nodes. */
   relayedSignals = 0;
+  private closed = false;
   private readonly peers = new Map<string, Peer>();
   private readonly invites = new Map<string, { pc: RTCPeerConnection; channel: RTCDataChannel }>();
   private readonly pendingCandidates = new Map<string, RTCIceCandidateInit[]>();
@@ -64,6 +65,7 @@ export class PeerNetwork {
 
   /** Any node in the quiz: create an offer and wrap it in an invite code. Each invite is for one node. */
   async createInvite(): Promise<{ inviteId: string; code: string }> {
+    if (this.closed) throw new Error("This node has left the quiz.");
     const pc = new RTCPeerConnection(RTC_CONFIG);
     const channel = pc.createDataChannel(CHANNEL_LABEL);
     await pc.setLocalDescription(await pc.createOffer());
@@ -141,15 +143,30 @@ export class PeerNetwork {
     return [...this.peers.values()].map((peer) => ({ ...peer.info, state: channelState(peer).toUpperCase() }));
   }
 
+  isOpen(nodeId: string): boolean {
+    const peer = this.peers.get(nodeId);
+    return peer !== undefined && channelState(peer) === "open";
+  }
+
+  /** This node and every node it has an open DataChannel to. */
+  onlineNodeIds(): string[] {
+    const linked = [...this.peers.values()].filter((p) => channelState(p) === "open").map((p) => p.info.nodeId);
+    return [this.self.nodeId, ...linked];
+  }
+
   /** Close every link, e.g. when the page is closed. */
+  /** Close every link for good, e.g. when leaving the quiz or closing the page. */
   close(): void {
+    this.closed = true;
     for (const peer of this.peers.values()) peer.pc.close();
     for (const invite of this.invites.values()) invite.pc.close();
+    this.invites.clear();
   }
 
   // --- Receiving ------------------------------------------------------------------
 
   private receive(data: unknown, fromNodeId: string): void {
+    if (this.closed) return;
     const message = parseMessage(data);
     // Unknown message types and messages seen before (loops, floods) are dropped.
     if (!message || this.seenMessageIds.has(message.messageId)) return;

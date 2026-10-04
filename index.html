@@ -10,6 +10,7 @@
         --muted: #6b7280;
         --line: #b8bec7;
         --error: #b91c1c;
+        --pressed: #2563eb;
       }
       * {
         box-sizing: border-box;
@@ -54,13 +55,16 @@
         border: 1px solid var(--line);
         border-radius: 6px;
       }
-      textarea {
+      textarea,
+      .link {
         font:
           13px/1.35 ui-monospace,
           Menlo,
           Consolas,
           monospace;
         word-break: break-all;
+      }
+      textarea {
         resize: vertical;
       }
       button {
@@ -84,27 +88,40 @@
         margin: 0;
         padding: 0;
       }
-      #participants li {
+      .rows li,
+      .results li {
         display: flex;
         justify-content: space-between;
+        gap: 12px;
         padding: 8px 0;
         border-bottom: 1px solid var(--line);
       }
-      #participants li span:last-child,
+      .results li span:last-child,
+      .rows li span:last-child,
       .muted {
         color: var(--muted);
+      }
+      .results li span:last-child,
+      .rows li span:last-child {
+        text-align: right;
       }
       .or {
         margin: 24px 0 0;
         text-align: center;
         color: var(--muted);
       }
-      .quiz-meta {
-        font-size: 1.1rem;
+      .quiz-name {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 700;
       }
-      .quiz-meta code {
-        font-size: 1.3rem;
-        font-weight: 600;
+      .tabs {
+        display: flex;
+        gap: 10px;
+        margin: 16px 0;
+      }
+      .tabs button[aria-pressed="true"] {
+        border: 2px solid var(--pressed);
       }
       .score-row {
         display: flex;
@@ -121,7 +138,7 @@
         font-weight: 600;
       }
       details {
-        margin-top: 40px;
+        margin-top: 24px;
       }
       summary {
         cursor: pointer;
@@ -130,13 +147,6 @@
       pre {
         overflow-x: auto;
         font-size: 13px;
-      }
-      .link {
-        font:
-          13px ui-monospace,
-          Menlo,
-          Consolas,
-          monospace;
       }
       /* Black on white in both colour schemes: phone cameras need the contrast. */
       .qr svg {
@@ -152,98 +162,141 @@
   </head>
   <body>
     <main>
-      <h1>P2P Quiz Wasm</h1>
+      <h1>🧩 P2P Quiz Wasm</h1>
       <p id="error" class="error" role="alert" hidden></p>
 
       <!-- Hidden until the WASM engine has loaded, so no click is lost. -->
       <section id="start" hidden>
         <p id="invited" hidden></p>
-        <label for="username">Username:</label>
+        <label for="username">👤 Your name:</label>
         <input id="username" type="text" autocomplete="off" spellcheck="false" />
         <div id="create-section">
-          <button id="create">CREATE QUIZ</button>
+          <button id="create">✨ CREATE QUIZ</button>
           <p class="or">or</p>
-          <label for="invite-code">Invite link or code:</label>
-          <textarea id="invite-code" rows="3" spellcheck="false" placeholder="https://…#p2pq1:…"></textarea>
+          <label for="invite-code">🔗 Join link or invite code:</label>
+          <textarea
+            id="invite-code"
+            rows="3"
+            spellcheck="false"
+            placeholder="https://…#join=… or https://…#p2pq1:…"
+          ></textarea>
         </div>
-        <button id="join">JOIN QUIZ</button>
+        <button id="join">🚀 JOIN QUIZ</button>
       </section>
 
-      <!-- Shown to a joining node: the response goes back to the inviter as a link. -->
+      <!-- Joining: looking for an online node through the relay, then receiving the quiz. -->
+      <section id="joining" hidden>
+        <p id="joining-status"></p>
+        <button id="cancel-join">✖️ CANCEL</button>
+      </section>
+
+      <!-- Manual joining: the response goes back to the inviter as a link. -->
       <section id="response" hidden>
         <p>
-          Send this response link back to <strong id="response-to"></strong>, for example in a chat, or let them scan
+          📨 Send this response link back to <strong id="response-to"></strong>, for example in a chat, or let them scan
           it. When they open it, you are connected.
         </p>
         <div id="response-qr" class="qr"></div>
         <label for="response-link">Response link:</label>
         <input id="response-link" class="link" type="text" readonly />
-        <button id="copy-response">COPY LINK</button>
-        <button id="share-response" hidden>SHARE</button>
+        <button id="copy-response">📋 COPY LINK</button>
+        <button id="share-response" hidden>📤 SHARE</button>
       </section>
 
-      <!-- A tab opened from a response link only hands it over to the quiz tab. -->
+      <!-- A tab opened from a manual response link only hands it over to the quiz tab. -->
       <section id="handoff" hidden>
         <p id="handoff-status"></p>
         <div id="handoff-copy" hidden>
           <div id="handoff-qr" class="qr"></div>
           <label for="handoff-link">Response link:</label>
           <input id="handoff-link" class="link" type="text" readonly />
-          <button id="copy-handoff">COPY LINK</button>
-          <button id="share-handoff" hidden>SHARE</button>
+          <button id="copy-handoff">📋 COPY LINK</button>
         </div>
-      </section>
-
-      <section id="syncing" hidden>
-        <p class="muted">Connected. Receiving the event log…</p>
       </section>
 
       <section id="quiz" hidden>
-        <p class="quiz-meta">Quiz: <code id="quiz-id"></code><br />You: <strong id="me"></strong></p>
-
-        <div id="question" hidden>
-          <h2 id="question-text"></h2>
-          <div id="options"></div>
-          <p id="answer-status"></p>
-          <p id="answer-count"></p>
-          <button id="show-scoreboard">SHOW SCOREBOARD</button>
-        </div>
-
-        <div id="scoreboard" hidden>
-          <h2>Scoreboard</h2>
-          <ol id="scores"></ol>
-        </div>
-
-        <h2>Participants</h2>
-        <ul id="participants"></ul>
-
-        <button id="invite">INVITE ANOTHER PEER</button>
-        <div id="invite-panel" hidden>
-          <p>Invite link for one new peer. They open it, or scan the code, and press JOIN QUIZ.</p>
-          <div id="invite-qr" class="qr"></div>
-          <label for="invite-link">Invite link:</label>
-          <input id="invite-link" class="link" type="text" readonly />
-          <button id="copy-invite">COPY LINK</button>
-          <button id="share-invite" hidden>SHARE</button>
-          <p class="muted">
-            When their response link comes back, open it in this browser and they are connected. Or paste it here:
-          </p>
-          <label for="response-input">Response link or code:</label>
-          <textarea id="response-input" rows="3" spellcheck="false" placeholder="https://…#p2pq1:…"></textarea>
-          <button id="connect">CONNECT</button>
-        </div>
+        <p class="quiz-name">🧩 <span id="quiz-name"></span></p>
+        <p id="quiz-meta" class="muted"></p>
 
         <div id="rejoin-panel" hidden>
-          <label for="rejoin-code">Not connected to any peer. Paste an invite link from a connected peer:</label>
-          <textarea id="rejoin-code" rows="3" spellcheck="false" placeholder="https://…#p2pq1:…"></textarea>
-          <button id="rejoin">JOIN QUIZ</button>
+          <p>🔌 You are not connected to anybody in the quiz right now.</p>
+          <button id="reconnect">🔌 RECONNECT</button>
+          <p id="reconnect-status" class="muted"></p>
+          <label for="rejoin-code">…or paste an invite link from a connected player:</label>
+          <textarea id="rejoin-code" rows="2" spellcheck="false" placeholder="https://…#p2pq1:…"></textarea>
+          <button id="rejoin">🔗 USE INVITE LINK</button>
         </div>
 
-        <button id="start-question" hidden>START QUESTION</button>
+        <nav class="tabs">
+          <button id="tab-play">🎮 Play</button>
+          <button id="tab-manage">🛠️ Manage</button>
+        </nav>
+
+        <!-- 🎮 Play: answer at your own pace. -->
+        <div id="play-view">
+          <div id="play-question" hidden>
+            <p id="question-progress" class="muted"></p>
+            <h2 id="question-text"></h2>
+            <div id="options"></div>
+          </div>
+          <div id="play-result" hidden>
+            <h2 id="score-title"></h2>
+            <ul id="my-results" class="results"></ul>
+          </div>
+          <p id="play-note" class="muted"></p>
+          <div id="leaderboard-box" hidden>
+            <h2>🏆 Leaderboard</h2>
+            <ol id="scores"></ol>
+          </div>
+        </div>
+
+        <!-- 🛠️ Manage: invite, follow the progress, finish or restart. -->
+        <div id="manage-view" hidden>
+          <h2>📣 Invite players</h2>
+          <div id="join-box">
+            <p>Anyone with this link or QR code joins with one click, as many people as you like.</p>
+            <div id="join-qr" class="qr"></div>
+            <label for="join-link">Join link:</label>
+            <input id="join-link" class="link" type="text" readonly />
+            <button id="copy-join">📋 COPY LINK</button>
+            <button id="share-join" hidden>📤 SHARE</button>
+            <p class="muted">
+              🔐 Joining knocks through the ntfy.sh relay, end-to-end encrypted. The quiz is peer-to-peer.
+            </p>
+          </div>
+          <p id="no-relay" class="muted" hidden>The relay is switched off: invite with a manual link below.</p>
+          <details id="manual-invite">
+            <summary>✉️ Invite without the relay (one person, two links)</summary>
+            <button id="invite">✉️ CREATE INVITE LINK</button>
+            <div id="invite-panel" hidden>
+              <p>Invite link for one person. They open it, or scan the code, and press JOIN QUIZ.</p>
+              <div id="invite-qr" class="qr"></div>
+              <label for="invite-link">Invite link:</label>
+              <input id="invite-link" class="link" type="text" readonly />
+              <button id="copy-invite">📋 COPY LINK</button>
+              <button id="share-invite" hidden>📤 SHARE</button>
+              <p class="muted">When their response link comes back, open it in this browser, or paste it here:</p>
+              <label for="response-input">Response link or code:</label>
+              <textarea id="response-input" rows="3" spellcheck="false" placeholder="https://…#p2pq1:…"></textarea>
+              <button id="connect">🤝 CONNECT</button>
+            </div>
+          </details>
+
+          <h2>👥 Players</h2>
+          <ul id="players" class="rows"></ul>
+          <p id="answer-total" class="muted"></p>
+
+          <h2>🎛️ Quiz</h2>
+          <p id="quiz-status"></p>
+          <button id="finish">🏁 FINISH QUIZ</button>
+          <button id="restart">🔄 RESTART (NEW ROUND)</button>
+        </div>
+
+        <button id="leave">🚪 LEAVE QUIZ</button>
       </section>
 
       <details>
-        <summary>Debug</summary>
+        <summary>🐞 Debug</summary>
         <pre id="debug-output"></pre>
       </details>
     </main>
