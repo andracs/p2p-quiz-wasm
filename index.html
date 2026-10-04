@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P2P Quiz Wasm</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --muted: #6b7280;
+        --line: #b8bec7;
+        --error: #b91c1c;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      body {
+        margin: 0;
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        font-size: 18px;
+        line-height: 1.45;
+      }
+      main {
+        max-width: 700px;
+        margin: 0 auto;
+        padding: 24px 16px 64px;
+      }
+      h1 {
+        font-size: 2rem;
+        margin: 0 0 16px;
+      }
+      h2 {
+        font-size: 1.3rem;
+        margin: 28px 0 8px;
+      }
+      label {
+        display: block;
+        margin: 16px 0 6px;
+        font-weight: 600;
+      }
+      input,
+      textarea {
+        width: 100%;
+        padding: 10px 12px;
+        font: inherit;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      textarea {
+        font:
+          13px/1.35 ui-monospace,
+          Menlo,
+          Consolas,
+          monospace;
+        word-break: break-all;
+        resize: vertical;
+      }
+      button {
+        display: block;
+        width: 100%;
+        margin: 10px 0;
+        padding: 14px 18px;
+        font: inherit;
+        font-weight: 600;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: default;
+        opacity: 0.55;
+      }
+      ul,
+      ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      #participants li {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      #participants li span:last-child,
+      .muted {
+        color: var(--muted);
+      }
+      .or {
+        margin: 24px 0 0;
+        text-align: center;
+        color: var(--muted);
+      }
+      .quiz-meta {
+        font-size: 1.1rem;
+      }
+      .quiz-meta code {
+        font-size: 1.3rem;
+        font-weight: 600;
+      }
+      .score-row {
+        display: flex;
+        justify-content: space-between;
+        text-align: left;
+      }
+      .details {
+        margin: 0 0 12px;
+        padding: 8px 18px;
+        border-left: 4px solid var(--line);
+      }
+      .error {
+        color: var(--error);
+        font-weight: 600;
+      }
+      details {
+        margin-top: 40px;
+      }
+      summary {
+        cursor: pointer;
+        color: var(--muted);
+      }
+      pre {
+        overflow-x: auto;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>P2P Quiz Wasm</h1>
+      <p id="error" class="error" role="alert" hidden></p>
+
+      <!-- Hidden until the WASM engine has loaded, so no click is lost. -->
+      <section id="start" hidden>
+        <label for="username">Username:</label>
+        <input id="username" type="text" autocomplete="off" spellcheck="false" />
+        <button id="create">CREATE QUIZ</button>
+        <p class="or">or</p>
+        <label for="invite-code">Invite code:</label>
+        <textarea id="invite-code" rows="3" spellcheck="false" placeholder="p2pq1:…"></textarea>
+        <button id="join">JOIN QUIZ</button>
+      </section>
+
+      <section id="response" hidden>
+        <label for="response-output">Response code:</label>
+        <textarea id="response-output" rows="5" readonly></textarea>
+        <button id="copy-response">COPY</button>
+        <p class="muted">
+          Give this code to <strong id="response-to"></strong>, who pastes it under “Response code”. Waiting for the
+          connection…
+        </p>
+      </section>
+
+      <section id="syncing" hidden>
+        <p class="muted">Connected. Receiving the event log…</p>
+      </section>
+
+      <section id="quiz" hidden>
+        <p class="quiz-meta">Quiz: <code id="quiz-id"></code><br />You: <strong id="me"></strong></p>
+
+        <div id="question" hidden>
+          <h2 id="question-text"></h2>
+          <div id="options"></div>
+          <p id="answer-status"></p>
+          <p id="answer-count"></p>
+          <button id="show-scoreboard">SHOW SCOREBOARD</button>
+        </div>
+
+        <div id="scoreboard" hidden>
+          <h2>Scoreboard</h2>
+          <ol id="scores"></ol>
+        </div>
+
+        <h2>Participants</h2>
+        <ul id="participants"></ul>
+
+        <button id="invite">INVITE ANOTHER PEER</button>
+        <div id="invite-panel" hidden>
+          <label for="invite-output">Invite code (give it to the new peer):</label>
+          <textarea id="invite-output" rows="5" readonly></textarea>
+          <button id="copy-invite">COPY</button>
+          <label for="response-input">Response code (paste the new peer's response):</label>
+          <textarea id="response-input" rows="3" spellcheck="false" placeholder="p2pq1:…"></textarea>
+          <button id="connect">CONNECT</button>
+        </div>
+
+        <div id="rejoin-panel" hidden>
+          <label for="rejoin-code">Not connected to any peer. Paste an invite code from a connected peer:</label>
+          <textarea id="rejoin-code" rows="3" spellcheck="false" placeholder="p2pq1:…"></textarea>
+          <button id="rejoin">JOIN QUIZ</button>
+        </div>
+
+        <button id="start-question" hidden>START QUESTION</button>
+      </section>
+
+      <details>
+        <summary>Debug</summary>
+        <pre id="debug-output"></pre>
+      </details>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

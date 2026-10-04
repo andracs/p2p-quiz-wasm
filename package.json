@@ -1,0 +1,17 @@
+{
+  "name": "p2p-quiz-wasm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "wasm": "wasm-pack build wasm --target web",
+    "dev": "npm run wasm && vite",
+    "build": "npm run wasm && tsc && vite build",
+    "preview": "vite preview",
+    "test": "cargo test --manifest-path wasm/Cargo.toml"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2"
+  }
+}
