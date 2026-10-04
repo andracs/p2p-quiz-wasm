@@ -51,7 +51,7 @@ export function parseJoinLink(text: string): { room: Room; quizPrefix: string } 
 }
 
 type RelayMessage =
-  | { kind: "knock"; from: string; username: string }
+  | { kind: "knock"; from: string; username: string; attempt: number }
   | { kind: "offer" | "answer"; from: string; to: string; code: BootstrapCode };
 
 /** ntfy.sh turns message bodies over 4096 bytes into file attachments: stay well below. */
@@ -145,8 +145,9 @@ export class Relay {
 }
 
 /**
- * Run by the first two online nodes of a quiz (lowest nodeIds). The first answers a knock
- * at once; the second only if nobody has offered after a few seconds.
+ * Run by the first two online nodes of a quiz (lowest nodeIds). One answers a knock at once,
+ * the other only if nobody has offered after a few seconds. They take turns: when an offer
+ * led nowhere, the newcomer knocks again and the other door keeper goes first.
  */
 export class Doorman {
   rank = 0;
@@ -174,7 +175,8 @@ export class Doorman {
     if (message.kind === "answer" && message.to === this.self.nodeId) void this.accept(message.code);
     // Even a node that still looks linked gets an offer: if it knocks, that link is dead (e.g. a reload).
     if (message.kind === "knock" && message.from !== this.self.nodeId && ageSeconds < 10) {
-      setTimeout(() => void this.offer(message.from), this.rank * 4000);
+      const first = (message.attempt ?? 0) % 2 === this.rank;
+      setTimeout(() => void this.offer(message.from), first ? 0 : 4000);
     }
   }
 
@@ -218,9 +220,10 @@ export class Knock {
 
   async start(): Promise<void> {
     await this.relay.listen();
+    let attempt = 0;
     const knock = () =>
       this.relay
-        .send({ kind: "knock", from: this.self.nodeId, username: this.self.username })
+        .send({ kind: "knock", from: this.self.nodeId, username: this.self.username, attempt: attempt++ })
         .catch((error) => this.report(`⚠️ ${error.message} Still trying…`));
     await knock();
     this.timer = setInterval(() => !this.busy && knock(), 15_000);
